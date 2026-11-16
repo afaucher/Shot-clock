@@ -4,67 +4,62 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#16110d">
+  <meta name="description" content="Camera espresso shot timer: starts at the first drop, follows the streams, counts down to your target and flags early blonding.">
   <title>Shot Clock</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>Shot Clock</h1>
-    <span id="status" class="status">Choose a source</span>
+    <span id="status" class="status">Loading vision engine…</span>
   </header>
 
   <main>
     <section class="viewer">
       <div class="stage" id="stage">
         <canvas id="view"></canvas>
-        <div class="hint" id="hint">Start the camera or open a video of a shot</div>
+        <div class="hint" id="hint">Start the camera, or open a video of a shot</div>
       </div>
       <video id="video" playsinline muted></video>
       <div class="source-row">
-        <button id="btnCamera">Camera</button>
-        <label class="button">Video file<input type="file" id="fileInput" accept="video/*" hidden></label>
+        <button id="btnCamera" disabled>Camera</button>
+        <label class="button" id="lblFile" aria-disabled="true">Video file<input type="file" id="fileInput" accept="video/*" hidden disabled></label>
         <button id="btnArm" class="primary" disabled>Arm</button>
+        <button id="btnStop" disabled>Stop</button>
       </div>
-      <p class="small">Drag on the picture to box the gap between the spout and the cup, then press <b>Arm</b> before you start the shot.</p>
+      <p class="small">Point the camera at the spouts and cup, press <b>Arm</b> before you start the pump, and hold steady for a second while it learns the scene. The streams are found on their own; hand-held is fine.</p>
     </section>
 
     <section class="readout">
       <div class="timer" id="timer">0.0</div>
       <div class="phase-row">
-        <span class="swatch" id="swatch"></span>
+        <span class="swatches" id="swatches"></span>
         <span class="phase" id="phase">Idle</span>
         <span class="blonde-at" id="blondeAt"></span>
       </div>
-      <div class="meter"><div class="meter-fill" id="meterFill"></div><div class="meter-mark"></div></div>
+      <div class="meter" title="Blonding progress"><div class="meter-fill" id="meterFill"></div><div class="meter-mark"></div></div>
       <canvas id="chart" height="180"></canvas>
-      <div class="legend small"><span>colour of the stream over time</span><span>line = paleness (lightness − saturation), dashed = blonde threshold</span></div>
+      <div class="legend small"><span>colour of each stream over the shot (0 = first liquid)</span><span>lines = paleness per stream · green = target</span></div>
     </section>
 
     <details class="settings" open>
       <summary>Settings</summary>
       <div class="grid">
-        <label>Blonde sensitivity <output id="outDelta"></output>
-          <input type="range" id="optDelta" min="8" max="60" step="1">
-          <span class="small">How much paler than its darkest point the stream must get. Lower = earlier alert.</span>
-        </label>
-        <label>Stream detection threshold <output id="outPix"></output>
-          <input type="range" id="optPix" min="10" max="120" step="1">
-          <span class="small">How different from the background a pixel must be.</span>
-        </label>
-        <label>Flow coverage <output id="outCov"></output>
-          <input type="range" id="optCov" min="0.01" max="0.4" step="0.01">
-          <span class="small">Share of the box that must be stream to count as pouring.</span>
-        </label>
         <label>Target shot time (s)
           <input type="number" id="optTarget" min="0" max="90" step="1">
           <span class="small">Counted from the first liquid. Pips at 3-2-1, a tone on the target. 0 = off.</span>
         </label>
+        <label>Blonde sensitivity <output id="outDelta"></output>
+          <input type="range" id="optDelta" min="5" max="40" step="1">
+          <span class="small">Experimental, not yet calibrated: how much paler than its own baseline a stream must get. Lower = earlier alert.</span>
+        </label>
         <label class="check"><input type="checkbox" id="optSound"> Sound</label>
-        <label class="check"><input type="checkbox" id="optSpeech"> Spoken "cut the shot"</label>
-        <label class="check"><input type="checkbox" id="optMask"> Show detected stream</label>
+        <label class="check"><input type="checkbox" id="optSpeech"> Spoken alerts</label>
+        <label class="check"><input type="checkbox" id="optMask"> Show detected streams</label>
         <button id="btnTest">Test alert</button>
       </div>
       <p class="small" id="camInfo"></p>
+      <p class="small" id="perfInfo"></p>
     </details>
 
     <section class="history">
@@ -73,6 +68,7 @@
     </section>
   </main>
 
+  <script src="vendor/opencv-4.10.0.js" async id="cvScript"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

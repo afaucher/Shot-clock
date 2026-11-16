@@ -48,14 +48,16 @@ async function runCase(name, { launchArgs = [], setup }) {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(url);
+  // OpenCV.js (~10 MB) must finish loading before a source can be chosen
+  await page.waitForFunction(() => window.shotClock?.ready === true, null, { timeout: 60000 });
   try {
     await setup(page);
-    // target before the synthetic clip's blonde point (~18.5 s), so blonding is not "early"
+    // target before the synthetic clip's blonde point, so blonding is not "early"
     await page.fill('#optTarget', String(TARGET));
     await page.waitForFunction(() => !document.getElementById('btnArm').disabled, null, { timeout: 15000 });
     await page.click('#btnArm');
     await waitForEvent(page, 'armed', 10000);
-    await waitForEvent(page, 'start', 15000);
+    await waitForEvent(page, 'start', 20000);
     await waitForEvent(page, 'blonde', 35000);
     if (shotsDir) await page.screenshot({ path: path.join(shotsDir, `${name}-blonde.png`) });
     await waitForEvent(page, 'end', 15000);

@@ -1,24 +1,22 @@
-import { ShotDetector, DEFAULTS } from './detector.js';
+import { StreamTracker, TRACKER_DEFAULTS } from './tracker.js';
 import { sounds, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
   status: $('status'), stage: $('stage'), view: $('view'), hint: $('hint'), video: $('video'),
-  btnCamera: $('btnCamera'), fileInput: $('fileInput'), btnArm: $('btnArm'),
-  timer: $('timer'), swatch: $('swatch'), phase: $('phase'), blondeAt: $('blondeAt'),
+  btnCamera: $('btnCamera'), fileInput: $('fileInput'), lblFile: $('lblFile'), btnArm: $('btnArm'), btnStop: $('btnStop'),
+  timer: $('timer'), swatches: $('swatches'), phase: $('phase'), blondeAt: $('blondeAt'),
   meterFill: $('meterFill'), chart: $('chart'),
-  optDelta: $('optDelta'), optPix: $('optPix'), optCov: $('optCov'),
-  optTarget: $('optTarget'), optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
-  outDelta: $('outDelta'), outPix: $('outPix'), outCov: $('outCov'),
-  btnTest: $('btnTest'), camInfo: $('camInfo'), history: $('history'),
+  optDelta: $('optDelta'), outDelta: $('outDelta'), optTarget: $('optTarget'),
+  optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
+  btnTest: $('btnTest'), camInfo: $('camInfo'), perfInfo: $('perfInfo'), history: $('history'),
 };
 
-const PROC_W = 320; // processing resolution (width); plenty for a stream
+const AREA = 270 * 480;      // working resolution (pixels) the tracker is tuned for
+const STREAM_COLORS = ['#f3e9df', '#7fc8f8', '#ffd166', '#c39bd3'];
 const proc = document.createElement('canvas');
 const pctx = proc.getContext('2d', { willReadFrequently: true });
 const vctx = el.view.getContext('2d');
-const maskCanvas = document.createElement('canvas');
-const mctx = maskCanvas.getContext('2d');
 
 // ---------------------------------------------------------------- storage
 function load(key, fallback) {
@@ -29,61 +27,70 @@ function save(key, value) {
 }
 
 const settings = Object.assign({
-  blondeDelta: DEFAULTS.blondeDelta,
-  pixelThreshold: DEFAULTS.pixelThreshold,
-  flowCoverage: DEFAULTS.flowCoverage,
+  blondeDelta: TRACKER_DEFAULTS.blondeDelta,
   targetAt: 25,
   sound: true,
   speech: true,
   showMask: true,
-  roi: { x: 0.42, y: 0.35, w: 0.16, h: 0.35 },
-}, load('shotclock.settings', {}));
+}, load('shotclock.settings.v2', {}));
 
-const detector = new ShotDetector({
-  blondeDelta: settings.blondeDelta,
-  pixelThreshold: settings.pixelThreshold,
-  flowCoverage: settings.flowCoverage,
-});
-
+let cv = null;
+let tracker = null;
 let source = null;          // 'camera' | 'file'
 let camTrack = null;
 let wakeLock = null;
-let lastPip = null;        // last countdown second announced
+let lastPip = null;
 let targetFired = false;
+let startAnnounced = false;
 let lastResult = null;
 let alertTimer = null;
+let procMs = 0;
+let lastFrameT = null;
 const eventLog = [];
+
+// ------------------------------------------------------------ OpenCV.js
+function loadOpenCv() {
+  return new Promise((resolve, reject) => {
+    const script = $('cvScript');
+    const ready = () => {
+      const m = window.cv;
+      if (!m) return false;
+      const done = () => {
+        // This Emscripten build's `then` resolves to itself; drop it so the
+        // module can be passed through promises without hanging.
+        delete m.then;
+        resolve(m);
+      };
+      if (m.Mat) done(); else m.onRuntimeInitialized = done;
+      return true;
+    };
+    if (!ready()) {
+      script.addEventListener('load', () => { if (!ready()) reject(new Error('OpenCV.js did not initialise')); });
+      script.addEventListener('error', () => reject(new Error('could not load vendor/opencv-4.10.0.js')));
+    }
+  });
+}
 
 // --------------------------------------------------------------- settings UI
 function bindSettings() {
   el.optDelta.value = settings.blondeDelta;
-  el.optPix.value = settings.pixelThreshold;
-  el.optCov.value = settings.flowCoverage;
   el.optTarget.value = settings.targetAt;
   el.optSound.checked = settings.sound;
   el.optSpeech.checked = settings.speech;
   el.optMask.checked = settings.showMask;
   const sync = () => {
     settings.blondeDelta = +el.optDelta.value;
-    settings.pixelThreshold = +el.optPix.value;
-    settings.flowCoverage = +el.optCov.value;
     settings.targetAt = Math.max(0, +el.optTarget.value || 0);
     settings.sound = el.optSound.checked;
     settings.speech = el.optSpeech.checked;
     settings.showMask = el.optMask.checked;
     el.outDelta.textContent = settings.blondeDelta;
-    el.outPix.textContent = settings.pixelThreshold;
-    el.outCov.textContent = Math.round(settings.flowCoverage * 100) + '%';
-    detector.setOptions({
-      blondeDelta: settings.blondeDelta,
-      pixelThreshold: settings.pixelThreshold,
-      flowCoverage: settings.flowCoverage,
-    });
+    tracker?.setOptions({ blondeDelta: settings.blondeDelta });
     sounds.enabled = settings.sound;
     sounds.speech = settings.speech;
-    save('shotclock.settings', settings);
+    save('shotclock.settings.v2', settings);
   };
-  for (const k of ['optDelta', 'optPix', 'optCov', 'optTarget', 'optSound', 'optSpeech', 'optMask']) {
+  for (const k of ['optDelta', 'optTarget', 'optSound', 'optSpeech', 'optMask']) {
     el[k].addEventListener('input', sync);
     el[k].addEventListener('change', sync);
   }
@@ -123,7 +130,8 @@ function openFile(file) {
     onSourceReady();
     el.video.pause();
     el.video.currentTime = 0;
-    el.camInfo.textContent = `Video file: ${el.video.videoWidth}×${el.video.videoHeight}, ${el.video.duration.toFixed(1)} s. Arm restarts it from the beginning.`;
+    el.camInfo.textContent = `Video file: ${el.video.videoWidth}×${el.video.videoHeight}, ${el.video.duration.toFixed(1)} s. `
+      + 'Arm plays it from the beginning; the first second should show no coffee.';
   }, { once: true });
 }
 
@@ -132,20 +140,22 @@ function stopSource() {
   if (el.video.src) { URL.revokeObjectURL(el.video.src); el.video.removeAttribute('src'); }
   camTrack = null;
   source = null;
-  detector.reset();
+  tracker?.reset();
 }
 
 function onSourceReady() {
   const vw = el.video.videoWidth, vh = el.video.videoHeight;
   el.stage.style.aspectRatio = `${vw} / ${vh}`;
-  const scale = Math.min(1, 960 / vw);
+  const scale = Math.min(1, 960 / Math.max(vw, vh));
   el.view.width = Math.round(vw * scale);
   el.view.height = Math.round(vh * scale);
-  proc.width = PROC_W;
-  proc.height = Math.round(PROC_W * vh / vw);
+  // keep the working area constant whatever the aspect ratio
+  const w = Math.sqrt(AREA * vw / vh);
+  proc.width = Math.round(w / 2) * 2;
+  proc.height = Math.round(AREA / w / 2) * 2;
   el.hint.hidden = true;
   el.btnArm.disabled = false;
-  setStatus('Box the stream, then Arm');
+  setStatus('Press Arm before you start the shot');
   startLoop();
 }
 
@@ -153,26 +163,24 @@ function describeCamera() {
   if (!camTrack) return;
   const s = camTrack.getSettings?.() || {};
   const caps = camTrack.getCapabilities?.() || {};
-  const lockable = ['exposureMode', 'whiteBalanceMode', 'focusMode'].filter((k) => caps[k]?.includes?.('manual'));
+  const lockable = ['exposureMode', 'whiteBalanceMode'].filter((k) => caps[k]?.includes?.('manual'));
   el.camInfo.textContent = `Camera: ${s.width}×${s.height} @ ${Math.round(s.frameRate || 0)} fps. ` +
     (lockable.length ? `Will lock ${lockable.join(', ').replace(/Mode/g, '')} when armed.`
-      : 'This camera/browser cannot lock exposure or white balance; keep lighting steady.');
+      : 'This camera/browser cannot lock exposure or white balance.');
 }
 
-// Freeze auto exposure/white balance so the stream colour is comparable
-// across the shot. Let it settle on "continuous" first, then lock.
+// Freeze auto exposure/white balance so colours are comparable through the shot.
 async function lockCamera() {
   if (!camTrack?.getCapabilities) return;
   const caps = camTrack.getCapabilities();
-  const keys = ['exposureMode', 'whiteBalanceMode', 'focusMode'];
   const cont = {}, manual = {};
-  for (const k of keys) {
+  for (const k of ['exposureMode', 'whiteBalanceMode']) {
     if (caps[k]?.includes('continuous')) cont[k] = 'continuous';
     if (caps[k]?.includes('manual')) manual[k] = 'manual';
   }
   try {
     if (Object.keys(cont).length) await camTrack.applyConstraints({ advanced: [cont] });
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => setTimeout(r, 500));
     if (Object.keys(manual).length) await camTrack.applyConstraints({ advanced: [manual] });
   } catch { /* best effort */ }
 }
@@ -182,60 +190,38 @@ async function arm() {
   unlockAudio();
   clearAlert();
   targetFired = false;
+  startAnnounced = false;
   lastPip = null;
   el.btnArm.disabled = true;
   if (source === 'file') {
     el.video.pause();
     el.video.currentTime = 0;
     await new Promise((r) => el.video.addEventListener('seeked', r, { once: true }));
-    detector.arm();
+    lastFrameT = null;
+    tracker.arm();
     await el.video.play();
   } else if (source === 'camera') {
     setStatus('Locking camera…');
     await lockCamera();
-    detector.arm();
+    tracker.arm();
   }
   el.btnArm.disabled = false;
+  el.btnStop.disabled = false;
   el.btnArm.textContent = 'Re-arm';
-  setStatus('Calibrating background — keep the box clear');
+  setStatus('Hold steady — learning the scene');
 }
 
-// ------------------------------------------------------------------- ROI
-let drag = null;
-function pointerPos(e) {
-  const r = el.view.getBoundingClientRect();
-  return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
-}
-el.view.addEventListener('pointerdown', (e) => {
-  if (!source || detector.state === 'pouring') return;
-  el.view.setPointerCapture(e.pointerId);
-  drag = pointerPos(e);
-});
-el.view.addEventListener('pointermove', (e) => {
-  if (!drag) return;
-  const p = pointerPos(e);
-  settings.roi = { x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y), w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y) };
-});
-el.view.addEventListener('pointerup', () => {
-  if (!drag) return;
-  drag = null;
-  if (settings.roi.w < 0.02 || settings.roi.h < 0.02) return;
-  setRoi(settings.roi);
-});
-
-function setRoi(roi) {
-  settings.roi = roi;
-  save('shotclock.settings', settings);
-  if (detector.state === 'calibrating' || detector.state === 'armed') detector.arm();
-  else if (detector.state === 'done') detector.reset();
-}
-
-function roiPixels() {
-  const r = settings.roi;
-  const x = Math.round(r.x * proc.width), y = Math.round(r.y * proc.height);
-  const w = Math.max(4, Math.min(proc.width - x, Math.round(r.w * proc.width)));
-  const h = Math.max(4, Math.min(proc.height - y, Math.round(r.h * proc.height)));
-  return { x, y, w, h };
+function stopShot() {
+  if (!tracker) return;
+  if (tracker.state === 'pouring') {
+    tracker.state = 'done';
+    tracker.tEnd = lastFrameT ?? tracker.lastT;
+    handleEvent({ type: 'end', t: tracker.tEnd, elapsed: tracker.tEnd - tracker.shotStart, manual: true });
+  } else if (tracker.state === 'armed' || tracker.state === 'learning') {
+    tracker.reset();
+    setStatus('Stopped. Press Arm for the next shot.');
+  }
+  el.btnStop.disabled = true;
 }
 
 // ------------------------------------------------------------------ loop
@@ -247,35 +233,35 @@ function startLoop() {
   const tick = (now, meta) => {
     if (!source) { loopRunning = false; return; }
     const t = source === 'file' && meta ? meta.mediaTime : performance.now() / 1000;
-    frame(t);
+    if (lastFrameT == null || t > lastFrameT) frame(t);
     if (useRVFC) el.video.requestVideoFrameCallback(tick);
     else requestAnimationFrame(tick);
   };
   if (useRVFC) el.video.requestVideoFrameCallback(tick);
   else requestAnimationFrame(tick);
-  // Keep the UI drawing even when the file is paused (no new frames).
   const idle = () => {
     if (!source) return;
-    if (el.video.paused) drawView(roiPixels());
+    if (el.video.paused) drawView();
     requestAnimationFrame(idle);
   };
   requestAnimationFrame(idle);
 }
 
 function frame(t) {
-  if (!el.video.videoWidth) return;
+  if (!el.video.videoWidth || !tracker) return;
+  lastFrameT = t;
   pctx.drawImage(el.video, 0, 0, proc.width, proc.height);
-  const r = roiPixels();
-  const img = pctx.getImageData(r.x, r.y, r.w, r.h);
-  const res = detector.process(img.data, r.w, r.h, t);
+  const img = pctx.getImageData(0, 0, proc.width, proc.height);
+  const t0 = performance.now();
+  const res = tracker.process(img.data, proc.width, proc.height, t);
+  procMs = procMs * 0.9 + (performance.now() - t0) * 0.1;
 
   for (const ev of res.events) handleEvent(ev);
 
-  const elapsed = detector.elapsed(t);
+  const elapsed = tracker.elapsed(t);
   const target = settings.targetAt;
-  if (target > 0 && detector.state === 'pouring' && !targetFired) {
+  if (target > 0 && tracker.state === 'pouring' && !targetFired) {
     const left = target - elapsed;
-    // 3-2-1 pips, then the target tone
     const sec = Math.ceil(left);
     if (left > 0 && sec <= 3 && sec !== lastPip) {
       lastPip = sec;
@@ -290,8 +276,9 @@ function frame(t) {
 
   lastResult = { ...res, elapsed };
   updateReadout(lastResult);
-  drawView(r);
+  drawView();
   drawChart();
+  el.perfInfo.textContent = `Vision: ${procMs.toFixed(0)} ms/frame at ${proc.width}×${proc.height}, ${tracker.fps.toFixed(0)} fps.`;
 }
 
 function handleEvent(ev) {
@@ -302,6 +289,7 @@ function handleEvent(ev) {
       break;
     case 'start':
       sounds.start();
+      startAnnounced = true;
       setStatus('Pouring');
       break;
     case 'blonde': {
@@ -310,69 +298,95 @@ function handleEvent(ev) {
       setStatus(early
         ? `Blonding early at ${ev.elapsed.toFixed(1)} s (target ${settings.targetAt} s) — cut the shot`
         : `Blonding at ${ev.elapsed.toFixed(1)} s — cut the shot!`);
-      document.body.classList.add('alerting');
-      clearTimeout(alertTimer);
-      alertTimer = setTimeout(clearAlert, 3500);
+      flash(3500);
       break;
     }
+    case 'target':
+      if (tracker.blondeAt == null) setStatus(`${settings.targetAt} s — target reached`);
+      flash(2000);
+      break;
     case 'end':
       sounds.end();
       setStatus(`Done — ${ev.elapsed.toFixed(1)} s. Re-arm for the next shot.`);
+      el.btnStop.disabled = true;
       saveShot();
-      break;
-    case 'target':
-      if (detector.blondeAt == null) setStatus(`${settings.targetAt} s — target reached`);
-      document.body.classList.add('alerting');
-      clearTimeout(alertTimer);
-      alertTimer = setTimeout(clearAlert, 2000);
       break;
   }
 }
 
+function flash(ms) {
+  document.body.classList.add('alerting');
+  clearTimeout(alertTimer);
+  alertTimer = setTimeout(clearAlert, ms);
+}
 function clearAlert() { document.body.classList.remove('alerting'); }
 
-// --------------------------------------------------------------- drawing
+const PHASES = { idle: 'Idle', learning: 'Learning scene…', armed: 'Ready', pouring: 'Pouring', done: 'Done' };
+
 function updateReadout(res) {
-  el.timer.textContent = res.elapsed.toFixed(1);
-  el.phase.textContent = res.phase;
-  if (res.rgb && detector.state === 'pouring') el.swatch.style.background = `rgb(${res.rgb.join(',')})`;
+  const provisional = res.state === 'armed' && res.provisional != null;
+  el.timer.textContent = (provisional ? res.provisional : res.elapsed).toFixed(1);
+  el.timer.classList.toggle('provisional', provisional);
+  let phase = PHASES[res.state];
+  if (provisional) phase = 'Coffee spotted…';
+  if (res.state === 'pouring' && tracker.blondeAt != null) phase = 'Blonde';
+  el.phase.textContent = phase;
+
+  // one swatch per stream currently seen
+  const dets = res.detections || [];
+  const html = dets.slice(0, 4).map((d) => `<span class="swatch" title="stream ${d.stream.id}" style="background:rgb(${d.rgb.join(',')});border-color:${STREAM_COLORS[(d.stream.id - 1) % 4]}"></span>`).join('');
+  if (res.state === 'pouring' || res.state === 'armed') el.swatches.innerHTML = html;
+
   const tgt = settings.targetAt;
   const parts = [];
   if (tgt > 0) parts.push(`target ${tgt} s`);
-  if (detector.blondeAt != null) {
-    parts.push(`blonde @ ${detector.blondeAt.toFixed(1)} s${tgt > 0 && detector.blondeAt < tgt ? ' (early)' : ''}`);
+  if (tracker.blondeAt != null) {
+    parts.push(`blonde @ ${tracker.blondeAt.toFixed(1)} s${tgt > 0 && tracker.blondeAt < tgt ? ' (early)' : ''}`);
   }
   el.blondeAt.textContent = parts.join(' · ');
-  el.timer.classList.toggle('near', tgt > 0 && detector.state === 'pouring' && res.elapsed >= tgt - 3 && res.elapsed < tgt);
-  // meter: 80% mark = blonde threshold
+  el.timer.classList.toggle('near', tgt > 0 && res.state === 'pouring' && res.elapsed >= tgt - 3 && res.elapsed < tgt);
   el.meterFill.style.width = Math.min(100, res.progress * 80) + '%';
 }
 
-function drawView(r) {
+function drawView() {
   const W = el.view.width, H = el.view.height;
+  if (!W) return;
   vctx.drawImage(el.video, 0, 0, W, H);
+  if (!tracker || !settings.showMask) return;
   const sx = W / proc.width, sy = H / proc.height;
-  const rx = r.x * sx, ry = r.y * sy, rw = r.w * sx, rh = r.h * sy;
-
-  if (settings.showMask && detector.mask && detector.state !== 'idle' && detector.state !== 'calibrating' &&
-      detector.mask.length === r.w * r.h) {
-    maskCanvas.width = r.w; maskCanvas.height = r.h;
-    const mi = mctx.createImageData(r.w, r.h);
-    for (let i = 0; i < detector.mask.length; i++) {
-      if (detector.mask[i]) { mi.data[i * 4] = 60; mi.data[i * 4 + 1] = 255; mi.data[i * 4 + 2] = 120; mi.data[i * 4 + 3] = 110; }
+  const dets = lastResult?.detections || [];
+  const Ti = tracker.state === 'idle' ? null : invert(tracker.T);
+  if (!Ti || !dets.length) return;
+  for (const d of dets) {
+    const color = STREAM_COLORS[(d.stream.id - 1) % 4];
+    vctx.fillStyle = 'rgba(80, 255, 140, 0.8)';
+    const step = Math.max(1, Math.floor(d.core.length / 400));
+    for (let k = 0; k < d.core.length; k += step) {
+      const i = d.core[k];
+      const x = i % proc.width, y = (i / proc.width) | 0;
+      const fx = Ti[0] * x + Ti[1] * y + Ti[2], fy = Ti[3] * x + Ti[4] * y + Ti[5];
+      vctx.fillRect(fx * sx - 1, fy * sy - 1, 2, 2);
     }
-    mctx.putImageData(mi, 0, 0);
-    vctx.imageSmoothingEnabled = false;
-    vctx.drawImage(maskCanvas, rx, ry, rw, rh);
-    vctx.imageSmoothingEnabled = true;
+    const [bx, by, bw, bh] = d.box;
+    const corners = [[bx, by], [bx + bw, by], [bx + bw, by + bh], [bx, by + bh]]
+      .map(([x, y]) => [(Ti[0] * x + Ti[1] * y + Ti[2]) * sx, (Ti[3] * x + Ti[4] * y + Ti[5]) * sy]);
+    vctx.strokeStyle = color;
+    vctx.lineWidth = Math.max(2, W / 360);
+    vctx.beginPath();
+    corners.forEach(([x, y], k) => (k ? vctx.lineTo(x, y) : vctx.moveTo(x, y)));
+    vctx.closePath();
+    vctx.stroke();
+    vctx.fillStyle = `rgb(${d.rgb.join(',')})`;
+    vctx.fillRect(corners[0][0], corners[0][1] - 18, 16, 14);
+    vctx.strokeRect(corners[0][0], corners[0][1] - 18, 16, 14);
   }
+}
 
-  const colors = { idle: '#ffffff', calibrating: '#ffd166', armed: '#7bd389', pouring: '#e0a458', done: '#9aa5b1' };
-  vctx.lineWidth = Math.max(2, W / 320);
-  vctx.strokeStyle = document.body.classList.contains('alerting') ? '#ff4d4d' : colors[detector.state];
-  vctx.setLineDash(detector.state === 'idle' ? [8, 6] : []);
-  vctx.strokeRect(rx, ry, rw, rh);
-  vctx.setLineDash([]);
+function invert(T) {
+  const [a, b, c, d, e, f] = T;
+  const det = a * e - b * d;
+  const ia = e / det, ib = -b / det, id = -d / det, ie = a / det;
+  return [ia, ib, -(ia * c + ib * f), id, ie, -(id * c + ie * f)];
 }
 
 function drawChart() {
@@ -382,16 +396,13 @@ function drawChart() {
   if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
   const g = c.getContext('2d');
   g.clearRect(0, 0, cw, ch);
-  const pad = 6 * dpr, ribbonH = 34 * dpr, axisH = 14 * dpr;
+  const pad = 6 * dpr, ribbonH = 26 * dpr, axisH = 14 * dpr;
   const plotTop = pad, plotBot = ch - ribbonH - axisH - pad;
-  const samples = detector.samples;
   const elapsed = lastResult ? lastResult.elapsed : 0;
   const tMax = Math.max(30, Math.ceil(elapsed + 2), settings.targetAt + 3);
   const X = (t) => pad + (t / tMax) * (cw - 2 * pad);
-  // paleness (L* - C*) runs roughly -30 (dark, saturated) .. +80 (pale)
-  const Y = (P) => plotBot - ((Math.max(-30, Math.min(80, P)) + 30) / 110) * (plotBot - plotTop);
+  const Y = (P) => plotBot - ((Math.max(-30, Math.min(70, P)) + 30) / 100) * (plotBot - plotTop);
 
-  // grid + axis labels every 5 s
   g.fillStyle = '#6f6257';
   g.font = `${10 * dpr}px system-ui`;
   g.strokeStyle = '#2a211b';
@@ -401,35 +412,55 @@ function drawChart() {
     g.beginPath(); g.moveTo(x, plotTop); g.lineTo(x, ch - axisH); g.stroke();
     if (x + 24 * dpr < cw) g.fillText(s + 's', x + 2 * dpr, ch - 3 * dpr);
   }
+  if (!tracker || tracker.shotStart == null) return;
+  const t0 = tracker.shotStart;
+  const most = Math.max(0, ...tracker.streams.map((s) => s.samples.length));
+  const streams = tracker.streams.filter((s) => s.samples.length > 3 && s.samples.length >= 0.25 * most);
 
-  // colour ribbon
-  const ribTop = ch - ribbonH - axisH;
-  for (let i = 0; i < samples.length; i++) {
-    const s = samples[i];
-    const x0 = X(s.t), x1 = i + 1 < samples.length ? X(samples[i + 1].t) : x0 + 2 * dpr;
-    g.fillStyle = `rgb(${s.rgb.join(',')})`;
-    g.fillRect(x0, ribTop, Math.max(1, x1 - x0 + 0.5), ribbonH);
+  // colour ribbon of the stream with the most samples
+  const main = streams.slice().sort((a, b) => b.samples.length - a.samples.length)[0];
+  if (main) {
+    const ribTop = ch - ribbonH - axisH;
+    const sm = main.samples;
+    const win = [];
+    for (let i = 0; i < sm.length; i++) {
+      win.push(sm[i].rgb);
+      while (win.length > 1 && sm[i].t - sm[i - win.length + 1].t > 0.7) win.shift();
+      const tt = sm[i].t - t0;
+      if (tt < 0) continue;
+      // 0.7 s per-channel median, so single noisy samples don't stripe the ribbon
+      const rgb = [0, 1, 2].map((c) => win.map((q) => q[c]).sort((p, q) => p - q)[win.length >> 1]);
+      const x0 = X(tt), x1 = i + 1 < sm.length ? X(sm[i + 1].t - t0) : x0 + 2 * dpr;
+      g.fillStyle = `rgb(${rgb.join(',')})`;
+      g.fillRect(x0, ribTop, Math.max(1, x1 - x0 + 0.5), ribbonH);
+    }
   }
 
-  // threshold
-  if (detector.refP != null) {
-    const y = Y(detector.refP + detector.opts.blondeDelta);
-    g.strokeStyle = '#ffd166';
-    g.setLineDash([6 * dpr, 4 * dpr]);
-    g.beginPath(); g.moveTo(pad, y); g.lineTo(cw - pad, y); g.stroke();
-    g.setLineDash([]);
-  }
-
-  // lightness line
-  if (samples.length > 1) {
-    g.strokeStyle = '#f3e9df';
-    g.lineWidth = 2 * dpr;
+  // paleness per stream (1 s median for readability)
+  for (const s of streams) {
+    g.strokeStyle = STREAM_COLORS[(s.id - 1) % 4];
+    g.lineWidth = 1.6 * dpr;
     g.beginPath();
-    samples.forEach((s, i) => (i ? g.lineTo(X(s.t), Y(s.P)) : g.moveTo(X(s.t), Y(s.P))));
+    let started = false;
+    const win = [];
+    for (const p of s.samples) {
+      const tt = p.t - t0;
+      win.push(p);
+      while (win.length && p.t - win[0].t > 1) win.shift();
+      if (tt < 0) continue;
+      const med = win.map((q) => q.P).sort((a, b) => a - b)[win.length >> 1];
+      if (started) g.lineTo(X(tt), Y(med)); else { g.moveTo(X(tt), Y(med)); started = true; }
+    }
     g.stroke();
+    if (s.baseline != null) {
+      g.setLineDash([5 * dpr, 4 * dpr]);
+      g.lineWidth = 1 * dpr;
+      const y = Y(s.baseline + tracker.opts.blondeDelta);
+      g.beginPath(); g.moveTo(pad, y); g.lineTo(cw - pad, y); g.stroke();
+      g.setLineDash([]);
+    }
   }
 
-  // target time
   if (settings.targetAt > 0) {
     const x = X(settings.targetAt);
     g.strokeStyle = '#7bd389';
@@ -438,10 +469,8 @@ function drawChart() {
     g.beginPath(); g.moveTo(x, plotTop); g.lineTo(x, ch - axisH); g.stroke();
     g.setLineDash([]);
   }
-
-  // blonde marker
-  if (detector.blondeAt != null) {
-    const x = X(detector.blondeAt);
+  if (tracker.blondeAt != null) {
+    const x = X(tracker.blondeAt);
     g.strokeStyle = '#ff4d4d';
     g.lineWidth = 2 * dpr;
     g.beginPath(); g.moveTo(x, plotTop); g.lineTo(x, ch - axisH); g.stroke();
@@ -450,13 +479,14 @@ function drawChart() {
 
 // --------------------------------------------------------------- history
 function saveShot() {
-  const s = detector.samples;
+  const main = tracker.streams.slice().sort((a, b) => b.samples.length - a.samples.length)[0];
+  const s = (main?.samples || []).filter((p) => p.t >= tracker.shotStart);
   const N = 48;
   const ribbon = [];
   for (let i = 0; i < N && s.length; i++) ribbon.push(s[Math.floor(i * s.length / N)].rgb);
   const hist = load('shotclock.history', []);
-  hist.unshift({ when: Date.now(), total: detector.elapsed(0), blondeAt: detector.blondeAt,
-    target: settings.targetAt || null, ribbon });
+  hist.unshift({ when: Date.now(), total: tracker.elapsed(0), blondeAt: tracker.blondeAt,
+    target: settings.targetAt || null, streams: tracker.streams.filter((x) => x.samples.length > 30).length, ribbon });
   save('shotclock.history', hist.slice(0, 20));
   renderHistory();
 }
@@ -476,24 +506,13 @@ function renderHistory() {
     li.innerHTML = `<b>${h.total.toFixed(1)} s</b><span>${when}${h.target ? ` · target ${h.target} s` : ''}${blonde}</span>`;
     const rib = document.createElement('div');
     rib.className = 'ribbon';
-    if (h.ribbon.length) rib.style.background = `linear-gradient(90deg, ${h.ribbon.map((c) => `rgb(${c.join(',')})`).join(',')})`;
+    if (h.ribbon?.length) rib.style.background = `linear-gradient(90deg, ${h.ribbon.map((c) => `rgb(${c.join(',')})`).join(',')})`;
     li.appendChild(rib);
     el.history.appendChild(li);
   }
 }
 
 function setStatus(text) { el.status.textContent = text; }
-
-// ------------------------------------------------------------------ wire up
-el.btnCamera.addEventListener('click', startCamera);
-el.fileInput.addEventListener('change', () => { if (el.fileInput.files[0]) openFile(el.fileInput.files[0]); });
-el.btnArm.addEventListener('click', arm);
-el.btnTest.addEventListener('click', () => { unlockAudio(); sounds.blonde(); });
-document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && source === 'camera' && !wakeLock) {
-    requestWakeLock();
-  }
-});
 
 async function requestWakeLock() {
   try {
@@ -502,8 +521,29 @@ async function requestWakeLock() {
   } catch { /* optional */ }
 }
 
+// ------------------------------------------------------------------ wire up
+el.btnCamera.addEventListener('click', startCamera);
+el.fileInput.addEventListener('change', () => { if (el.fileInput.files[0]) openFile(el.fileInput.files[0]); });
+el.btnArm.addEventListener('click', arm);
+el.btnStop.addEventListener('click', stopShot);
+el.btnTest.addEventListener('click', () => { unlockAudio(); sounds.blonde(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && source === 'camera' && !wakeLock) requestWakeLock();
+});
+
 bindSettings();
 renderHistory();
 
-// Exposed for automated tests and console tinkering.
-window.shotClock = { detector, sounds, settings, setRoi, eventLog, get result() { return lastResult; } };
+window.shotClock = { sounds, settings, eventLog, get tracker() { return tracker; }, get result() { return lastResult; } };
+
+loadOpenCv().then((m) => {
+  cv = m;
+  tracker = new StreamTracker(cv, { blondeDelta: settings.blondeDelta });
+  window.shotClock.ready = true;
+  el.btnCamera.disabled = false;
+  el.fileInput.disabled = false;
+  el.lblFile.removeAttribute('aria-disabled');
+  setStatus('Choose a source');
+}).catch((err) => {
+  setStatus('Vision engine failed to load: ' + err.message);
+});

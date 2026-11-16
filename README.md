@@ -1,92 +1,75 @@
 # Shot Clock
 
-A camera-based espresso shot timer. Point a phone or webcam at the stream and it:
+A camera espresso shot timer that runs in the browser. Point a phone at the spouts and cup, and it:
 
-1. **Starts the timer on its own** when the shot starts, i.e. at the first liquid (not when the pump turns on).
-2. **Counts down to your target time** (default 25 s, measured from the first liquid) with 3-2-1 pips and a tone on the target.
-3. **Tracks the stream colour** through the shot (dark red-brown → caramel/orange → blonde) and plots it live.
-4. **Sounds an alert when the stream blondes**: three beeps, a spoken "cut the shot", and vibration on phones.
-   If it blondes *before* your target, the alert and the history flag it as **early**. That usually points to fast flow or channeling (light tamp, coarse grind).
-5. Stops when the flow stops and saves the shot (time, blonde point, colour ribbon) to a local history.
+1. **Finds and follows the streams on its own.** There's no box to draw, hand-held is fine, and it handles two spouts.
+2. **Starts the clock at the first liquid** (not when the pump turns on). A grey provisional time shows as soon as coffee is spotted. Once a stream has been present for 2 s, the time turns white with a beep, backdated to the first drop.
+3. **Counts down to your target time** (default 25 s from first liquid) with 3-2-1 pips and a tone on the target.
+4. **Tracks each stream's colour** and plots it live.
+5. **Flags blonding**, and marks it **early** if it happens before your target. That usually means fast flow or channeling (light tamp, coarse grind). *This alert is experimental and not yet calibrated.*
+6. Ends the shot when the streams stop (or when you press **Stop**) and keeps a local history.
 
-Everything runs in the browser. There is no build step, no server-side processing, and nothing is uploaded.
+Everything runs on the device with [OpenCV.js](https://docs.opencv.org/4.x/d5/d10/tutorial_js_root.html) (WebAssembly). Nothing is uploaded and there is no server, so it can be published as a static site on GitHub Pages.
+
+## Publish on GitHub Pages
+
+The repo includes `.github/workflows/pages.yml`, which publishes only the app files (`index.html`, `style.css`, `js/`, `vendor/`).
+
+1. On GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+2. Push to `main`, or open the **Actions** tab, choose **Deploy to GitHub Pages** and press **Run workflow**.
+3. The app is then at `https://<user>.github.io/<repo>/`. Pages serves over HTTPS, which phones require before they allow camera access.
+
+The first load downloads about 10 MB (OpenCV.js); after that the browser caches it.
 
 ## Run it locally
 
 ```bash
 python3 serve.py              # http://localhost:8000 (camera works on this computer)
-python3 serve.py --https      # https://<LAN-IP>:8443 for a phone on the same Wi-Fi
+python3 serve.py --https      # https://<LAN-IP>:8443 for a phone on the same Wi-Fi (self-signed; accept the warning once)
 ```
 
-Browsers only allow camera access on `localhost` or over HTTPS. `--https` creates a self-signed certificate in `.cert/`, so accept the warning on the phone once.
-
-### Using it
+## Using it
 
 1. Press **Camera** (or **Video file** to replay a recording).
-2. **Drag a box** over the gap between the spout and the cup, covering the stream only (not the cup or the portafilter). Narrow and tall works best.
-3. Press **Arm** while nothing is flowing. It takes about 0.3 s to learn the background, then shows *Ready*.
-4. Pull the shot. The timer starts on its own, and you hear the alert when the stream blondes.
-5. Press **Re-arm** before the next shot.
+2. Frame the spouts and the cup, with the streams' path in view.
+3. Press **Arm** *before* starting the pump, and hold roughly still for about a second while it learns the scene ("Learning scene…" → "Ready").
+4. Pull the shot. The clock starts at the first liquid, counts down to your target, and alerts on blonding.
+5. **Re-arm** before the next shot. **Stop** ends a shot by hand (useful if drips keep it going).
 
-Tips for the camera setup:
-- **Steady, even light.** Keep the phone fixed (a small tripod or prop). On Android Chrome the app locks exposure, white balance and focus when you press Arm. Elsewhere, avoid changing light such as a window with passing clouds.
-- **A plain backdrop behind the stream helps** a lot. A blue or green card is ideal, because coffee is never that colour.
-- Turn on **Show detected stream** to see in green which pixels it treats as coffee. If the green misses the stream, lower *Stream detection threshold*. If it lights up background noise, raise it.
+Settings: target time, blonde sensitivity (experimental), sound, spoken alerts, and whether to draw the detected streams. The *Vision* line under Settings shows processing speed on your device.
 
-## How the detection works
+## How it works
 
-All the logic is in `js/detector.js`, a pure module with no DOM code, so it runs the same in Node and in the browser.
+`js/tracker.js` takes OpenCV.js as a parameter, so the same code runs in the browser and in Node (`tools/track.mjs`).
 
 | Step | Method |
 |---|---|
-| Stream pixels | Background subtraction inside your box. The background is the average of a few frames taken at Arm and slowly follows lighting drift while waiting. |
-| Start | Stream covers ≥ 4% of the box for 250 ms. The timer is then backdated to the first faint drip (up to 4 s earlier). |
-| Colour | Mean colour of stream pixels only, averaged in linear RGB, converted to CIELAB, then smoothed with a 0.4 s time constant. |
-| **Blonde** | **Paleness = L\* − chroma.** Dark, caramel and orange are all *saturated*, so paleness stays flat through them while lightness climbs by ~40 points. Blonde is the only phase that is both light and washed out. The alert fires when paleness rises *Blonde sensitivity* points (default 25) above the shot's own minimum and stays there for 0.4 s. Because it compares the shot to itself, absolute camera colour accuracy doesn't matter. |
-| End | No real flow for 1.5 s. Trailing drips count toward the shot time. |
+| Camera motion | KLT corners and optical flow, fitted with a RANSAC similarity transform to a reference frame taken at Arm. Drift-free, so hand shake is cancelled. |
+| Candidates | A thin vertical line map in Lab, minus the reference's line map dilated by a few px. Edges that were there before the shot (chrome, cup rims) cancel even with parallax. |
+| Liquid or not | A **flow score**: frame-to-frame change inside a candidate vs a ring around it. Falling coffee keeps changing; reflections on stainless only move with the camera. On real clips, streams scored 1.7–2.3 and artefacts 0.6–1.1. |
+| Shot start | A stream seen in about two-thirds of frames for 2 s confirms the shot. The clock is backdated to its first appearance. Thresholds are time-based, so slower phones behave the same. |
+| Colour | Median Lab of each stream's core pixels. **Paleness = L\* − chroma.** |
+| Blonding | A stream's paleness (1 s median) rising *Blonde sensitivity* points above its own baseline, held for 1 s. Compares each stream with itself, because absolute colour varies a lot between setups. |
+| End | No flowing stream for 2 s, or **Stop**. |
 
-Measured on reference colours:
+Speed: about 27 ms/frame in Node and 31–35 ms/frame in headless Chromium on a server CPU. Phones vary.
 
-| Phase | L\* | Chroma | Paleness |
-|---|---|---|---|
-| dark red-brown | 19–25 | 25–31 | ≈ −6 |
-| caramel / orange | 49–57 | 46–58 | ≈ −1 to +3 |
-| tan (blonding) | 70 | 35 | +35 |
-| pale blonde | 80–87 | 25–32 | +48 to +62 |
-
-## Tuning on real shots
-
-Record a shot on your phone (keep it still and frame it the same way you would for live use), then either:
-
-- open it in the app with **Video file** and press **Arm**, or
-- run it headless and print the timeline:
+## Headless runs and tests
 
 ```bash
-node tools/analyze.mjs myshot.mp4 --roi 0.42,0.35,0.16,0.35 --table
-#   --roi x,y,w,h is normalised 0..1 (top-left x, y, width, height)
-#   --delta N  blonde sensitivity   --pix N  stream threshold   --cov F  flow coverage
-```
-
-The `--table` output shows L\*, chroma, paleness and progress every 0.5 s, so you can see where *you* would have cut the shot and set `--delta` to match.
-
-## Tests
-
-```bash
-npm test                                   # detector unit tests (node:test)
-python3 tests/make_test_video.py /tmp/shot.webm             # synthetic shot video (needs numpy + ffmpeg)
+node tools/track.mjs shot.mp4 --arm 1.0      # run the browser tracker on a video file, print events + colour table
+npm test                                     # unit tests (geometry, colour)
+python3 tests/make_test_video.py /tmp/shot.webm             # synthetic shot (needs numpy + ffmpeg)
 python3 tests/make_test_video.py /tmp/shot.mjpeg --lead 5   # same, as a fake webcam feed
-node tests/e2e.mjs --file /tmp/shot.webm --camera /tmp/shot.mjpeg   # real Chromium via Playwright
+node tests/e2e.mjs --file /tmp/shot.webm --camera /tmp/shot.mjpeg   # real Chromium: load OpenCV, arm, start, pips, target, blonde, end
 ```
 
-The synthetic clip has its first drip at 1.5 s, starts blonding about 18 s into the shot, and stops at 24 s. Both browser paths (file and fake webcam) detect the start within 0.05 s, alert at 18.2–18.5 s, and report a 23.97 s shot.
+## Research and real footage
 
-## Real footage
+`research/` holds the Python/OpenCV prototype this tracker was ported from, and findings from two real hand-held clips. Both times the start was correct to within about 0.2 s and both spouts were tracked with the same settings, but the colour curves of a poor and a better shot differ a lot. See [research/README.md](research/README.md).
 
-`research/` holds the OpenCV prototype that finds and follows streams in handheld footage on its own (no box, no still camera), plus findings from the first real clip. In short: the clock starts at the first liquid, confirmed by a stream that persists for 2 s and backdated so the time is exact. Blonding has to be calibrated against each stream's own caramel-phase colour, not fixed numbers. See [research/README.md](research/README.md).
+## Not done yet
 
-## Not done yet / ideas
-
-- Real-world thresholds are untested. The defaults come from reference colours and a synthetic clip, so expect to tune *Blonde sensitivity* on your first few shots.
-- Bluetooth scale (Acaia, Decent, etc.) via Web Bluetooth to cut by weight with colour as a cross-check.
-- Two spouts: track both streams, or alert when either one blondes.
-- Package as an installable PWA (manifest + service worker) or wrap in Capacitor for a native app.
+- **Blonding calibration needs much more data.** The alert threshold has only been seen on two shots. The plan is in-app recording plus labels (tap when you'd cut), and an evaluation script over many shots.
+- On some setups drips after pump-off keep a stream "alive"; use **Stop**.
+- Offline/PWA install, and running the vision in a Web Worker to keep the UI smoother on slow phones.

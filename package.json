@@ -2,12 +2,12 @@
   "name": "shot-clock",
   "version": "0.1.0",
   "private": true,
-  "description": "Camera-based espresso shot timer with blonding alert",
+  "description": "Camera espresso shot timer with stream tracking (OpenCV.js) and blonding alert",
   "type": "module",
   "scripts": {
     "start": "python3 serve.py",
-    "test": "node --test tests/detector.test.mjs",
-    "analyze": "node tools/analyze.mjs",
+    "test": "node --test tests/tracker.test.mjs",
+    "track": "node tools/track.mjs",
     "e2e": "node tests/e2e.mjs"
   }
 }
