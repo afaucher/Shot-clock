@@ -2,7 +2,7 @@
 
 A camera-based espresso shot timer. Point a phone or webcam at the stream and it:
 
-1. **Starts the timer on its own** at the first drip, or on pump noise from the microphone if you time from pump-on.
+1. **Starts the timer on its own** when the shot starts, i.e. at the first liquid (not when the pump turns on).
 2. **Tracks the stream colour** through the shot (dark red-brown → caramel/orange → blonde) and plots it live.
 3. **Sounds an alert when the stream blondes**: three beeps, a spoken "cut the shot", and vibration on phones.
 4. Stops when the flow stops and saves the shot (time, blonde point, colour ribbon) to a local history.
@@ -38,7 +38,7 @@ All the logic is in `js/detector.js`, a pure module with no DOM code, so it runs
 | Step | Method |
 |---|---|
 | Stream pixels | Background subtraction inside your box. The background is the average of a few frames taken at Arm and slowly follows lighting drift while waiting. |
-| Start | Stream covers ≥ 4% of the box for 250 ms. The timer is then backdated to the first faint drip (up to 4 s earlier). Pump trigger: low-band (40–700 Hz) mic energy 10 dB above the room's noise floor for 200 ms. |
+| Start | Stream covers ≥ 4% of the box for 250 ms. The timer is then backdated to the first faint drip (up to 4 s earlier). |
 | Colour | Mean colour of stream pixels only, averaged in linear RGB, converted to CIELAB, then smoothed with a 0.4 s time constant. |
 | **Blonde** | **Paleness = L\* − chroma.** Dark, caramel and orange are all *saturated*, so paleness stays flat through them while lightness climbs by ~40 points. Blonde is the only phase that is both light and washed out. The alert fires when paleness rises *Blonde sensitivity* points (default 25) above the shot's own minimum and stays there for 0.4 s. Because it compares the shot to itself, absolute camera colour accuracy doesn't matter. |
 | End | No real flow for 1.5 s. Trailing drips count toward the shot time. |
@@ -80,7 +80,7 @@ The synthetic clip has its first drip at 1.5 s, starts blonding about 18 s into 
 
 ## Real footage
 
-`research/` holds the OpenCV prototype that finds and follows streams in handheld footage on its own (no box, no still camera), plus findings from the first real clip. In short: start the timer from pump audio, and calibrate blonding against each stream's own caramel-phase colour, not fixed numbers. See [research/README.md](research/README.md).
+`research/` holds the OpenCV prototype that finds and follows streams in handheld footage on its own (no box, no still camera), plus findings from the first real clip. In short: the clock starts at the first liquid, confirmed by a stream that persists for 2 s and backdated so the time is exact. Blonding has to be calibrated against each stream's own caramel-phase colour, not fixed numbers. See [research/README.md](research/README.md).
 
 ## Not done yet / ideas
 

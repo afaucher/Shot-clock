@@ -86,7 +86,6 @@ export class ShotDetector {
     this.firstSign = null;    // first faint drip seen while armed
     this.lastSign = null;
     this.flowConfirmed = false;
-    this.externalStart = false;
     this.smooth = null;       // smoothed linear RGB {r,g,b}
     this.smoothLab = null;
     this.refP = null;         // lowest smoothed paleness after settling
@@ -100,16 +99,6 @@ export class ShotDetector {
   arm() {
     this.reset();
     this.state = 'calibrating';
-  }
-
-  // Start the timer from an external trigger (e.g. pump sound) before the
-  // first drop is visible. Colour tracking still waits for visible flow.
-  externalTrigger(t) {
-    if (this.state !== 'armed') return false;
-    this.state = 'pouring';
-    this.t0 = t;
-    this.externalStart = true;
-    return true;
   }
 
   elapsed(t) {
@@ -198,20 +187,16 @@ export class ShotDetector {
       this.flowSince = null;
     }
 
-    if (this.state === 'armed' || (this.state === 'pouring' && !this.flowConfirmed)) {
+    if (this.state === 'armed') {
       if (this.flowSince != null && (t - this.flowSince) * 1000 >= o.startHoldMs) {
         this.flowConfirmed = true;
         this.tFlowFirst = this.flowSince;
-        if (this.state === 'armed') {
-          this.state = 'pouring';
-          // backdate to the first drip if it led into this flow
-          const drip = this.firstSign != null && (this.flowSince - this.firstSign) * 1000 <= o.dripLookbackMs
-            ? this.firstSign : this.flowSince;
-          this.t0 = Math.min(drip, this.flowSince);
-          events.push({ type: 'start', t: this.t0, elapsed: 0 });
-        } else {
-          events.push({ type: 'flow', t: this.tFlowFirst, elapsed: this.tFlowFirst - this.t0 });
-        }
+        this.state = 'pouring';
+        // backdate to the first drip if it led into this flow
+        const drip = this.firstSign != null && (this.flowSince - this.firstSign) * 1000 <= o.dripLookbackMs
+          ? this.firstSign : this.flowSince;
+        this.t0 = Math.min(drip, this.flowSince);
+        events.push({ type: 'start', t: this.t0, elapsed: 0 });
       }
     }
 
@@ -273,7 +258,6 @@ export class ShotDetector {
     if (this.state === 'calibrating') return 'Calibrating';
     if (this.state === 'armed') return 'Ready';
     if (this.state === 'done') return 'Done';
-    if (!this.flowConfirmed) return 'Pre-infusion';
     if (this.refP == null) return 'First drips';
     if (this.blondeAt != null) return 'Blonde';
     if (this.progress() >= 0.6) return 'Turning pale';

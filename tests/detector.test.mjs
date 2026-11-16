@@ -98,20 +98,3 @@ test('no shot -> no events beyond armed', () => {
   for (let f = 0; f < 10 * FPS; f++) types.push(...det.process(makeFrame(rand, null), W, H, f / FPS).events.map((e) => e.type));
   assert.deepEqual(types, ['armed']);
 });
-
-test('external (pump) trigger starts timer before first drip', () => {
-  const det = new ShotDetector();
-  const rand = rng(5);
-  det.arm();
-  const events = [];
-  for (let f = 0; f < 36 * FPS; f++) {
-    const t = f / FPS;
-    if (f === Math.round(0.5 * FPS) + 20) det.externalTrigger(t); // pump on, ~6 s pre-infusion
-    events.push(...det.process(makeFrame(rand, script(t, { lead: 7.2 })), W, H, t).events);
-  }
-  const flow = events.find((e) => e.type === 'flow');
-  assert.ok(flow, 'flow event after pump start');
-  assert.ok(flow.elapsed > 5, `pre-infusion ${flow.elapsed}`);
-  assert.ok(events.find((e) => e.type === 'blonde'));
-  assert.ok(events.find((e) => e.type === 'end'));
-});

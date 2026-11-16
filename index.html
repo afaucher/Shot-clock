@@ -43,12 +43,6 @@
     <details class="settings" open>
       <summary>Settings</summary>
       <div class="grid">
-        <label>Start timer on
-          <select id="optTrigger">
-            <option value="flow">First drip (camera)</option>
-            <option value="pump">Pump sound (microphone)</option>
-          </select>
-        </label>
         <label>Blonde sensitivity <output id="outDelta"></output>
           <input type="range" id="optDelta" min="8" max="60" step="1">
           <span class="small">How much paler than its darkest point the stream must get. Lower = earlier alert.</span>
@@ -70,7 +64,6 @@
         <button id="btnTest">Test alert</button>
       </div>
       <p class="small" id="camInfo"></p>
-      <p class="small" id="micInfo"></p>
     </details>
 
     <section class="history">

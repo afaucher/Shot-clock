@@ -11,8 +11,17 @@ uses OpenCV calls that also exist in OpenCV.js, so it can be ported 1:1.
 Writes to --out:
     overlay.mp4    detections drawn on the ORIGINAL (moving) frames
     streams.csv    per frame, per stream: L*, a*, b*, chroma, hue, paleness
-    timeline.png   colour curves per stream + pump on/off from the audio
-    pump.txt       pump on/off times detected from the soundtrack
+    timeline.png   colour curves per stream against shot time
+    events.txt     shot start (first liquid), plus pump on/off from the audio
+                   for reference
+
+The shot clock starts at the FIRST LIQUID, not the pump. A stream counts as
+present while it is seen densely (10 of the last 15 frames); once one has
+stayed present for CONFIRM_S seconds, the clock is backdated to that
+stream's first appearance. Parallax slivers and focus artefacts never stay
+dense that long (<= 1.5 s on the first real clip, vs 15-30 s for the real
+streams). The decision is causal, i.e. what the live app can do: the
+display is exact, the start beep just comes CONFIRM_S late.
 
 Pipeline per frame (working resolution 270 px wide):
   1. Registration: KLT points frame-to-frame for a prediction, then refined
@@ -35,6 +44,8 @@ import numpy as np
 
 W = 270                 # working width
 NEW_T = 3.0             # persistence threshold for "new line" evidence
+CONFIRM_S = 2.0         # a stream must stay dense this long to start the clock
+LOOKBACK_S = 3.0        # how far before the dense run the first sighting may be
 
 
 def to_lab(bgr):
@@ -96,6 +107,12 @@ class Track:
         Track._next += 1
         self.cx, self.hits, self.first, self.last = cx, 1, t, t
         self.stream = None
+        self.recent = [t]           # hit times, for the density test
+        self.run_start = None       # start of the current dense run
+
+    def dense(self, t, window=0.5, need=10):
+        self.recent = [x for x in self.recent if t - x <= window]
+        return len(self.recent) >= need
 
     @property
     def confirmed(self):
@@ -138,9 +155,7 @@ def main():
 
     pump = detect_pump(args.video)
     if pump:
-        with open(os.path.join(args.out, 'pump.txt'), 'w') as fh:
-            fh.write(f'pump on {pump[0]:.2f} s\npump off {pump[1]:.2f} s\n')
-        print(f'pump on {pump[0]:.2f}s, off {pump[1]:.2f}s')
+        print(f'pump on {pump[0]:.2f}s, off {pump[1]:.2f}s (reference only)')
     arm = args.arm if args.arm is not None else ((pump[0] + 1.0) if pump else 1.0)
 
     cap = cv2.VideoCapture(args.video)
@@ -165,6 +180,7 @@ def main():
     persist = np.zeros((H, W), np.float32)
     ones = np.full((H, W), 255, np.uint8)
     tracks, streams = [], []        # streams: list of dicts {id, cx}
+    shot_start = None
     writer = cv2.VideoWriter(os.path.join(args.out, 'overlay_raw.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), fps, (VW, VH))
     out_csv = open(os.path.join(args.out, 'streams.csv'), 'w', newline='')
     cw = csv.writer(out_csv)
@@ -210,7 +226,9 @@ def main():
                 best.cx = best.cx * 0.8 + d['cx'] * 0.2
                 best.hits += 1
                 best.last = t
+                best.recent.append(t)
             d['track'] = best
+
             # merge confirmed tracks into streams: one stream per ~20 px column
             if best.confirmed and best.stream is None:
                 s = min((s for s in streams if abs(s['cx'] - best.cx) < 20), key=lambda s: abs(s['cx'] - best.cx), default=None)
@@ -218,6 +236,15 @@ def main():
                     s = dict(id=len(streams) + 1, cx=best.cx)
                     streams.append(s)
                 best.stream = s
+        # shot clock: a stream that stays dense for CONFIRM_S starts it
+        for tr in tracks:
+            if tr.dense(t):
+                tr.run_start = t if tr.run_start is None else tr.run_start
+                if shot_start is None and t - tr.run_start >= CONFIRM_S:
+                    shot_start = max(tr.first, tr.run_start - LOOKBACK_S)
+                    print(f'shot start (first liquid) {shot_start:.2f}s, confirmed at {t:.2f}s')
+            else:
+                tr.run_start = None
         tracks = [tr for tr in tracks if tr.confirmed or t - tr.last < 1.0]
 
         vis = cv2.resize(raw[i], (VW, VH), interpolation=cv2.INTER_AREA)
@@ -244,9 +271,7 @@ def main():
             cv2.rectangle(vis, (lx, ly - 32), (lx + 14, ly - 18), tuple(int(v) for v in rgb), -1)
             cv2.putText(vis, f"stream {tr.stream['id']}", (lx + 18, ly - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
             cv2.putText(vis, f'pale {P:4.1f}', (lx, ly - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        status = f'{t:5.1f}s'
-        if pump:
-            status += '  pump ON' if pump[0] <= t <= pump[1] else '  pump off'
+        status = f'video {t:5.1f}s   SHOT ' + (f'{t - shot_start:5.1f}s' if shot_start is not None else '  --  ')
         cv2.rectangle(vis, (0, 0), (VW, 26), (0, 0, 0), -1)
         cv2.putText(vis, status, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
         writer.write(vis)
@@ -258,10 +283,14 @@ def main():
     if subprocess.run(['ffmpeg', '-loglevel', 'error', '-y', '-i', src, '-c:v', 'libx264', '-crf', '26',
                        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dst]).returncode == 0:
         os.remove(src)
-    plot(args.out, pump)
+    with open(os.path.join(args.out, 'events.txt'), 'w') as fh:
+        fh.write(f'shot start (first liquid): {shot_start:.2f} s\n' if shot_start is not None else 'no shot detected\n')
+        if pump:
+            fh.write(f'pump on: {pump[0]:.2f} s (reference only)\npump off: {pump[1]:.2f} s (reference only)\n')
+    plot(args.out, pump, shot_start or 0.0)
 
 
-def plot(out, pump):
+def plot(out, pump, t0):
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -283,7 +312,7 @@ def plot(out, pump):
     fig, axes = plt.subplots(4, 1, figsize=(10, 10), sharex=True)
     for sid, rr in sorted(by.items()):
         rr.sort(key=lambda r: r['t'])
-        t = np.array([r['t'] for r in rr])
+        t = np.array([r['t'] for r in rr]) - t0
 
         def sm(key, win=0.7):
             v = np.array([r[key] for r in rr])
@@ -296,12 +325,13 @@ def plot(out, pump):
             ax.set_ylabel(lab)
         rgb = cv2.cvtColor(np.stack([L * 2.55, a + 128, b + 128], 1).astype(np.uint8)[None], cv2.COLOR_LAB2RGB)[0] / 255
         axes[3].scatter(t, np.full_like(t, -10 - 6 * sid), c=rgb, s=30, marker='s')
-    if pump:
-        for ax in axes:
+    for ax in axes:
+        ax.axvline(0, color='black', lw=1)
+        if pump:
             for x in pump[:2]:
-                ax.axvline(x, color='grey', ls='--', lw=0.8)
+                ax.axvline(x - t0, color='grey', ls=':', lw=0.8)
     axes[0].legend(loc='lower right')
-    axes[3].set_xlabel('video time (s)  —  dashed: pump on/off from audio')
+    axes[3].set_xlabel('shot time (s) from first liquid  —  dotted: pump on/off (reference)')
     fig.suptitle('Stream colour over the shot')
     fig.tight_layout()
     fig.savefig(os.path.join(out, 'timeline.png'), dpi=110)

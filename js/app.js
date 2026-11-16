@@ -1,5 +1,5 @@
 import { ShotDetector, DEFAULTS } from './detector.js';
-import { sounds, unlockAudio, PumpListener } from './audio.js';
+import { sounds, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -7,10 +7,10 @@ const el = {
   btnCamera: $('btnCamera'), fileInput: $('fileInput'), btnArm: $('btnArm'),
   timer: $('timer'), swatch: $('swatch'), phase: $('phase'), blondeAt: $('blondeAt'),
   meterFill: $('meterFill'), chart: $('chart'),
-  optTrigger: $('optTrigger'), optDelta: $('optDelta'), optPix: $('optPix'), optCov: $('optCov'),
+  optDelta: $('optDelta'), optPix: $('optPix'), optCov: $('optCov'),
   optBackup: $('optBackup'), optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
   outDelta: $('outDelta'), outPix: $('outPix'), outCov: $('outCov'),
-  btnTest: $('btnTest'), camInfo: $('camInfo'), micInfo: $('micInfo'), history: $('history'),
+  btnTest: $('btnTest'), camInfo: $('camInfo'), history: $('history'),
 };
 
 const PROC_W = 320; // processing resolution (width); plenty for a stream
@@ -29,7 +29,6 @@ function save(key, value) {
 }
 
 const settings = Object.assign({
-  trigger: 'flow',
   blondeDelta: DEFAULTS.blondeDelta,
   pixelThreshold: DEFAULTS.pixelThreshold,
   flowCoverage: DEFAULTS.flowCoverage,
@@ -45,7 +44,6 @@ const detector = new ShotDetector({
   pixelThreshold: settings.pixelThreshold,
   flowCoverage: settings.flowCoverage,
 });
-const pump = new PumpListener();
 
 let source = null;          // 'camera' | 'file'
 let camTrack = null;
@@ -57,7 +55,6 @@ const eventLog = [];
 
 // --------------------------------------------------------------- settings UI
 function bindSettings() {
-  el.optTrigger.value = settings.trigger;
   el.optDelta.value = settings.blondeDelta;
   el.optPix.value = settings.pixelThreshold;
   el.optCov.value = settings.flowCoverage;
@@ -66,7 +63,6 @@ function bindSettings() {
   el.optSpeech.checked = settings.speech;
   el.optMask.checked = settings.showMask;
   const sync = () => {
-    settings.trigger = el.optTrigger.value;
     settings.blondeDelta = +el.optDelta.value;
     settings.pixelThreshold = +el.optPix.value;
     settings.flowCoverage = +el.optCov.value;
@@ -86,7 +82,7 @@ function bindSettings() {
     sounds.speech = settings.speech;
     save('shotclock.settings', settings);
   };
-  for (const k of ['optTrigger', 'optDelta', 'optPix', 'optCov', 'optBackup', 'optSound', 'optSpeech', 'optMask']) {
+  for (const k of ['optDelta', 'optPix', 'optCov', 'optBackup', 'optSound', 'optSpeech', 'optMask']) {
     el[k].addEventListener('input', sync);
     el[k].addEventListener('change', sync);
   }
@@ -195,15 +191,6 @@ async function arm() {
   } else if (source === 'camera') {
     setStatus('Locking camera…');
     await lockCamera();
-    if (settings.trigger === 'pump') {
-      try {
-        if (!pump.active) await pump.start();
-        pump.recalibrate();
-        el.micInfo.textContent = 'Microphone listening for the pump. Keep the room quiet while armed.';
-      } catch (err) {
-        el.micInfo.textContent = 'Microphone unavailable (' + err.message + '); falling back to first drip.';
-      }
-    }
     detector.arm();
   }
   el.btnArm.disabled = false;
@@ -280,15 +267,6 @@ function frame(t) {
   const img = pctx.getImageData(r.x, r.y, r.w, r.h);
   const res = detector.process(img.data, r.w, r.h, t);
 
-  // Pump-sound trigger (camera only)
-  if (source === 'camera' && settings.trigger === 'pump' && pump.active) {
-    const onset = pump.poll(t, detector.state === 'armed');
-    if (onset != null && detector.externalTrigger(onset)) {
-      res.events.push({ type: 'start', t: onset, elapsed: 0, via: 'pump' });
-      res.state = detector.state;
-    }
-  }
-
   for (const ev of res.events) handleEvent(ev);
 
   const elapsed = detector.elapsed(t);
@@ -309,13 +287,10 @@ function handleEvent(ev) {
   eventLog.push(ev);
   switch (ev.type) {
     case 'armed':
-      setStatus(settings.trigger === 'pump' && pump.active ? 'Ready — listening for the pump' : 'Ready — start your shot');
+      setStatus('Ready — start your shot');
       break;
     case 'start':
       sounds.start();
-      setStatus(ev.via === 'pump' ? 'Pump on — waiting for first drip' : 'Pouring');
-      break;
-    case 'flow':
       setStatus('Pouring');
       break;
     case 'blonde':
