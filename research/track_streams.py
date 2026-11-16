@@ -31,8 +31,11 @@ Pipeline per frame (working resolution 270 px wide):
      so edges that were already there (chrome, cup rims) cancel even with
      small misregistration or parallax. Streams are the lines that appear.
   4. Persistence + connected components (tall, thin) -> detections.
-  5. Tracks keep stable ids; neighbouring tracks are merged into streams.
-  6. Colour = median Lab of the component's core (strongest line pixels).
+  5. Flow score: frame-to-frame change inside the detection vs a ring around
+     it. Only tracks that keep "flowing" become streams - this is what rejects
+     reflections on stainless and parallax edges, independent of colour.
+  6. Tracks keep stable ids; neighbouring tracks are merged into streams.
+  7. Colour = median Lab of the component's core (strongest line pixels).
 """
 import argparse
 import csv
@@ -47,6 +50,10 @@ NEW_T = 3.0             # persistence threshold for "new line" evidence
 CONFIRM_S = 2.0         # a stream must stay dense this long to start the clock
 LOOKBACK_S = 3.0        # how far before the dense run the first sighting may be
 TARGETS = (20, 25)      # target shot times marked on the timeline (from first liquid)
+FLOW_MIN = 1.4          # median flow score a track needs to count as a stream:
+                        # falling coffee keeps changing frame to frame, while
+                        # reflections/edges only move with the camera (real
+                        # streams 1.7-2.2, artefacts 0.6-1.1 on two clips)
 
 
 def to_lab(bgr):
@@ -110,6 +117,12 @@ class Track:
         self.stream = None
         self.recent = [t]           # hit times, for the density test
         self.run_start = None       # start of the current dense run
+        self.flows = []             # recent flow scores
+        self.pending = []           # colour rows held until the track qualifies
+
+    def flowing(self, n=30, need=10):
+        f = self.flows[-n:]
+        return len(f) >= need and float(np.median(f)) >= FLOW_MIN
 
     def dense(self, t, window=0.5, need=10):
         self.recent = [x for x in self.recent if t - x <= window]
@@ -185,7 +198,8 @@ def main():
     writer = cv2.VideoWriter(os.path.join(args.out, 'overlay_raw.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), fps, (VW, VH))
     out_csv = open(os.path.join(args.out, 'streams.csv'), 'w', newline='')
     cw = csv.writer(out_csv)
-    cw.writerow(['t', 'stream', 'track', 'cx', 'L', 'a', 'b', 'C', 'h', 'P', 'n'])
+    cw.writerow(['t', 'stream', 'track', 'cx', 'L', 'a', 'b', 'C', 'h', 'P', 'n', 'flow'])
+    prev_lab = None
 
     for i in range(ri + 1, len(raw)):
         t = i / fps
@@ -197,6 +211,10 @@ def main():
         valid = cv2.erode(cv2.warpAffine(ones, T[:2], (W, H), flags=cv2.INTER_NEAREST, borderValue=0),
                           np.ones((9, 9), np.uint8), borderType=cv2.BORDER_CONSTANT, borderValue=0) > 0
         lab = to_lab(stab)
+        # frame-to-frame change (registered): falling coffee keeps changing,
+        # reflections and edges only move with registration error
+        change = np.zeros((H, W), np.float32) if prev_lab is None else np.abs(lab - prev_lab).sum(axis=2)
+        prev_lab = lab
         lm = line_map(lab)
         lm[~valid] = 0
         if i < ri + int(fps):
@@ -215,7 +233,17 @@ def main():
             if core.sum() < 5:
                 continue
             c = lab[core]
-            dets.append(dict(cx=x + w / 2, box=(x, y, w, h), core=core, n=int(core.sum()),
+            # flow score: change inside the stream vs a ring just around it
+            x0, y0 = max(0, x - 8), max(0, y - 4)
+            x1, y1 = min(W, x + w + 8), min(H, y + h + 4)
+            ring = np.zeros((H, W), bool)
+            ring[y0:y1, x0:x1] = True
+            ring &= ~cv2.dilate(comp.astype(np.uint8), np.ones((3, 5), np.uint8)).astype(bool)
+            ring &= valid
+            inside = float(np.mean(change[core]))
+            around = float(np.mean(change[ring])) if ring.any() else inside
+            flow = inside / (around + 1.0)
+            dets.append(dict(cx=x + w / 2, box=(x, y, w, h), core=core, n=int(core.sum()), flow=flow,
                              L=float(np.median(c[:, 0])), a=float(np.median(c[:, 1])), b=float(np.median(c[:, 2]))))
         for d in sorted(dets, key=lambda d: -d['n']):
             best = min((tr for tr in tracks if abs(tr.cx - d['cx']) < 12 and tr.last < t),
@@ -229,19 +257,22 @@ def main():
                 best.last = t
                 best.recent.append(t)
             d['track'] = best
+            best.flows.append(d['flow'])
 
-            # merge confirmed tracks into streams: one stream per ~20 px column
-            if best.confirmed and best.stream is None:
+            # merge confirmed, flowing tracks into streams: one per ~20 px column
+            if best.confirmed and best.stream is None and best.flowing():
                 s = min((s for s in streams if abs(s['cx'] - best.cx) < 20), key=lambda s: abs(s['cx'] - best.cx), default=None)
                 if s is None:
-                    s = dict(id=len(streams) + 1, cx=best.cx)
+                    s = dict(id=len(streams) + 1, cx=best.cx, flows=[])
                     streams.append(s)
                 best.stream = s
+            if best.stream is not None:
+                best.stream['flows'].append(d['flow'])
         # shot clock: a stream that stays dense for CONFIRM_S starts it
         for tr in tracks:
             if tr.dense(t):
                 tr.run_start = t if tr.run_start is None else tr.run_start
-                if shot_start is None and t - tr.run_start >= CONFIRM_S:
+                if shot_start is None and t - tr.run_start >= CONFIRM_S and tr.flowing():
                     shot_start = max(tr.first, tr.run_start - LOOKBACK_S)
                     print(f'shot start (first liquid) {shot_start:.2f}s, confirmed at {t:.2f}s')
             else:
@@ -252,13 +283,22 @@ def main():
         Tinv = cv2.invertAffineTransform(T[:2]).astype(np.float32)
         for d in dets:
             tr = d['track']
-            if tr.stream is None:
-                continue
+            # a stream counts only while its overall flow score says "liquid"
             C = float(np.hypot(d['a'], d['b']))
             hue = float((np.degrees(np.arctan2(d['b'], d['a'])) + 360) % 360)
             P = d['L'] - C
-            cw.writerow([f'{t:.3f}', tr.stream['id'], tr.id, f"{d['cx']:.1f}", f"{d['L']:.1f}", f"{d['a']:.1f}",
-                         f"{d['b']:.1f}", f'{C:.1f}', f'{hue:.0f}', f'{P:.1f}', d['n']])
+            row = [f'{t:.3f}', tr.id, f"{d['cx']:.1f}", f"{d['L']:.1f}", f"{d['a']:.1f}",
+                   f"{d['b']:.1f}", f'{C:.1f}', f'{hue:.0f}', f'{P:.1f}', d['n'], f"{d['flow']:.2f}"]
+            qualified = tr.stream is not None and len(tr.stream['flows']) >= 15 and np.median(tr.stream['flows']) >= FLOW_MIN
+            if not qualified:
+                # hold the samples: a stream is only recognised once its flow
+                # score has built up, but its early (dark) colour matters
+                tr.pending = (tr.pending + [row])[-300:]
+                continue
+            for pr in tr.pending:
+                cw.writerow([pr[0], tr.stream['id']] + pr[1:])
+            tr.pending = []
+            cw.writerow([row[0], tr.stream['id']] + row[1:])
             ys, xs = np.nonzero(d['core'])
             pts = (np.stack([xs, ys, np.ones_like(xs)], 1).astype(np.float32) @ Tinv.T * sx).astype(int)
             keep = (pts[:, 0] >= 0) & (pts[:, 0] < VW) & (pts[:, 1] >= 0) & (pts[:, 1] < VH)
@@ -309,7 +349,8 @@ def plot(out, pump, t0):
     # real streams persist from first flow to the end; keep those with at least
     # 3 s of samples and >= 30% of the best stream's evidence
     top = max(len(v) for v in by.values())
-    by = {k: v for k, v in by.items() if len(v) >= max(90, 0.3 * top)}
+    by = {k: v for k, v in by.items()
+          if len(v) >= max(90, 0.3 * top) and np.median([r['flow'] for r in v]) >= FLOW_MIN}
     fig, axes = plt.subplots(4, 1, figsize=(10, 10), sharex=True)
     for sid, rr in sorted(by.items()):
         rr.sort(key=lambda r: r['t'])
