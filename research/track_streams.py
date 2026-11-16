@@ -46,6 +46,7 @@ W = 270                 # working width
 NEW_T = 3.0             # persistence threshold for "new line" evidence
 CONFIRM_S = 2.0         # a stream must stay dense this long to start the clock
 LOOKBACK_S = 3.0        # how far before the dense run the first sighting may be
+TARGETS = (20, 25)      # target shot times marked on the timeline (from first liquid)
 
 
 def to_lab(bgr):
@@ -327,11 +328,15 @@ def plot(out, pump, t0):
         axes[3].scatter(t, np.full_like(t, -10 - 6 * sid), c=rgb, s=30, marker='s')
     for ax in axes:
         ax.axvline(0, color='black', lw=1)
+        for tgt in TARGETS:
+            ax.axvline(tgt, color='green', ls='--', lw=0.9)
         if pump:
             for x in pump[:2]:
                 ax.axvline(x - t0, color='grey', ls=':', lw=0.8)
     axes[0].legend(loc='lower right')
-    axes[3].set_xlabel('shot time (s) from first liquid  —  dotted: pump on/off (reference)')
+    for tgt in TARGETS:
+        axes[0].text(tgt + 0.3, axes[0].get_ylim()[0] + 2, f'{tgt} s', color='green', fontsize=8)
+    axes[3].set_xlabel('shot time (s) from first liquid  —  green: target times, dotted: pump on/off (reference)')
     fig.suptitle('Stream colour over the shot')
     fig.tight_layout()
     fig.savefig(os.path.join(out, 'timeline.png'), dpi=110)

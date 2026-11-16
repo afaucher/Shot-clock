@@ -48,8 +48,8 @@ export const sounds = {
     tone(440, t + 0.12, 0.12, { type: 'sine', gain: 0.25 });
   },
 
-  blonde() {
-    this.log.push('blonde');
+  blonde(early = false) {
+    this.log.push(early ? 'blonde-early' : 'blonde');
     if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 400]);
     if (!this.enabled || !unlockAudio()) return;
     const t = ctx.currentTime;
@@ -57,7 +57,7 @@ export const sounds = {
     if (this.speech && 'speechSynthesis' in window) {
       setTimeout(() => {
         try {
-          const u = new SpeechSynthesisUtterance('Blonding. Cut the shot.');
+          const u = new SpeechSynthesisUtterance(early ? 'Blonding early. Cut the shot.' : 'Blonding. Cut the shot.');
           u.rate = 1.1;
           speechSynthesis.speak(u);
         } catch { /* ignore */ }
@@ -65,11 +65,23 @@ export const sounds = {
     }
   },
 
-  backup() {
-    this.log.push('backup');
+  // countdown pip before the target time
+  pip() {
+    this.log.push('pip');
     if (!this.enabled || !unlockAudio()) return;
-    const t = ctx.currentTime;
-    tone(784, t, 0.3, { gain: 0.4 });
-    tone(784, t + 0.4, 0.3, { gain: 0.4 });
+    tone(880, ctx.currentTime, 0.09, { type: 'sine', gain: 0.35 });
+  },
+
+  // target shot time reached
+  target(seconds) {
+    this.log.push('target');
+    if (navigator.vibrate) navigator.vibrate(500);
+    if (!this.enabled || !unlockAudio()) return;
+    tone(1175, ctx.currentTime, 0.6, { type: 'sine', gain: 0.45 });
+    if (this.speech && 'speechSynthesis' in window) {
+      setTimeout(() => {
+        try { speechSynthesis.speak(new SpeechSynthesisUtterance(`${seconds} seconds`)); } catch { /* ignore */ }
+      }, 650);
+    }
   },
 };

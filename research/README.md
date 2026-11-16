@@ -39,9 +39,12 @@ Colour of the clean stream (right spout, in front of the mug):
 | 17–36 s | 45→51 | ~43 | 2→8 | slow lightening |
 | 37–40 s | 51–56 | 40–45 | 10→23 | sharp rise near the end |
 
+Your read of this shot: **under-tamped**, so it went light early. Your usual target is 25 s from first liquid, maybe 20 s. The data agrees: the dark phase lasted only about 2 s of shot time, the right stream reached full caramel lightness by about 6 s in, and the left spout sprayed (channeling). By the 20 s and 25 s marks the stream had been light for a long time. On this shot a blonding alert is a diagnosis ("blonded early"), not a cue to cut on time.
+
 Lessons:
 - **The clock starts at first liquid, not at the pump.** On this machine the pump ran 9 s before any coffee appeared, which is why first liquid needs reliable detection: a single false sliver must not start the clock.
 - **Absolute colour numbers depend on the setup.** The left stream reads about 15 paleness points higher than the right one throughout, because it is thin, sprays, and blends with the grey wall and black cup behind it. Same shot, different backdrop.
+- **Target time is the primary cue; colour is the check.** The app now counts down to a target (default 25 s from first liquid) and flags blonding that happens before it as early.
 - **Blonding here is gradual, not a step.** The fixed threshold in the current app (paleness +25 from idealised reference colours) would never fire on the clean stream. The trigger has to be relative to each stream's own caramel-phase level and trend, and calibrated on real shots, ideally against when the user would have cut.
 
 ## Known gaps

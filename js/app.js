@@ -8,7 +8,7 @@ const el = {
   timer: $('timer'), swatch: $('swatch'), phase: $('phase'), blondeAt: $('blondeAt'),
   meterFill: $('meterFill'), chart: $('chart'),
   optDelta: $('optDelta'), optPix: $('optPix'), optCov: $('optCov'),
-  optBackup: $('optBackup'), optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
+  optTarget: $('optTarget'), optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
   outDelta: $('outDelta'), outPix: $('outPix'), outCov: $('outCov'),
   btnTest: $('btnTest'), camInfo: $('camInfo'), history: $('history'),
 };
@@ -32,7 +32,7 @@ const settings = Object.assign({
   blondeDelta: DEFAULTS.blondeDelta,
   pixelThreshold: DEFAULTS.pixelThreshold,
   flowCoverage: DEFAULTS.flowCoverage,
-  backupAt: 0,
+  targetAt: 25,
   sound: true,
   speech: true,
   showMask: true,
@@ -48,7 +48,8 @@ const detector = new ShotDetector({
 let source = null;          // 'camera' | 'file'
 let camTrack = null;
 let wakeLock = null;
-let backupFired = false;
+let lastPip = null;        // last countdown second announced
+let targetFired = false;
 let lastResult = null;
 let alertTimer = null;
 const eventLog = [];
@@ -58,7 +59,7 @@ function bindSettings() {
   el.optDelta.value = settings.blondeDelta;
   el.optPix.value = settings.pixelThreshold;
   el.optCov.value = settings.flowCoverage;
-  el.optBackup.value = settings.backupAt;
+  el.optTarget.value = settings.targetAt;
   el.optSound.checked = settings.sound;
   el.optSpeech.checked = settings.speech;
   el.optMask.checked = settings.showMask;
@@ -66,7 +67,7 @@ function bindSettings() {
     settings.blondeDelta = +el.optDelta.value;
     settings.pixelThreshold = +el.optPix.value;
     settings.flowCoverage = +el.optCov.value;
-    settings.backupAt = +el.optBackup.value || 0;
+    settings.targetAt = Math.max(0, +el.optTarget.value || 0);
     settings.sound = el.optSound.checked;
     settings.speech = el.optSpeech.checked;
     settings.showMask = el.optMask.checked;
@@ -82,7 +83,7 @@ function bindSettings() {
     sounds.speech = settings.speech;
     save('shotclock.settings', settings);
   };
-  for (const k of ['optDelta', 'optPix', 'optCov', 'optBackup', 'optSound', 'optSpeech', 'optMask']) {
+  for (const k of ['optDelta', 'optPix', 'optCov', 'optTarget', 'optSound', 'optSpeech', 'optMask']) {
     el[k].addEventListener('input', sync);
     el[k].addEventListener('change', sync);
   }
@@ -180,7 +181,8 @@ async function lockCamera() {
 async function arm() {
   unlockAudio();
   clearAlert();
-  backupFired = false;
+  targetFired = false;
+  lastPip = null;
   el.btnArm.disabled = true;
   if (source === 'file') {
     el.video.pause();
@@ -270,11 +272,20 @@ function frame(t) {
   for (const ev of res.events) handleEvent(ev);
 
   const elapsed = detector.elapsed(t);
-  if (settings.backupAt > 0 && detector.state === 'pouring' && !backupFired &&
-      detector.blondeAt == null && elapsed >= settings.backupAt) {
-    backupFired = true;
-    sounds.backup();
-    handleEvent({ type: 'backup', t, elapsed });
+  const target = settings.targetAt;
+  if (target > 0 && detector.state === 'pouring' && !targetFired) {
+    const left = target - elapsed;
+    // 3-2-1 pips, then the target tone
+    const sec = Math.ceil(left);
+    if (left > 0 && sec <= 3 && sec !== lastPip) {
+      lastPip = sec;
+      sounds.pip();
+    }
+    if (left <= 0) {
+      targetFired = true;
+      sounds.target(target);
+      handleEvent({ type: 'target', t, elapsed });
+    }
   }
 
   lastResult = { ...res, elapsed };
@@ -293,20 +304,27 @@ function handleEvent(ev) {
       sounds.start();
       setStatus('Pouring');
       break;
-    case 'blonde':
-      sounds.blonde();
-      setStatus(`Blonding at ${ev.elapsed.toFixed(1)} s — cut the shot!`);
+    case 'blonde': {
+      const early = settings.targetAt > 0 && ev.elapsed < settings.targetAt;
+      sounds.blonde(early);
+      setStatus(early
+        ? `Blonding early at ${ev.elapsed.toFixed(1)} s (target ${settings.targetAt} s) — cut the shot`
+        : `Blonding at ${ev.elapsed.toFixed(1)} s — cut the shot!`);
       document.body.classList.add('alerting');
       clearTimeout(alertTimer);
       alertTimer = setTimeout(clearAlert, 3500);
       break;
+    }
     case 'end':
       sounds.end();
       setStatus(`Done — ${ev.elapsed.toFixed(1)} s. Re-arm for the next shot.`);
       saveShot();
       break;
-    case 'backup':
-      setStatus(`Backup alert at ${ev.elapsed.toFixed(0)} s`);
+    case 'target':
+      if (detector.blondeAt == null) setStatus(`${settings.targetAt} s — target reached`);
+      document.body.classList.add('alerting');
+      clearTimeout(alertTimer);
+      alertTimer = setTimeout(clearAlert, 2000);
       break;
   }
 }
@@ -318,7 +336,14 @@ function updateReadout(res) {
   el.timer.textContent = res.elapsed.toFixed(1);
   el.phase.textContent = res.phase;
   if (res.rgb && detector.state === 'pouring') el.swatch.style.background = `rgb(${res.rgb.join(',')})`;
-  el.blondeAt.textContent = detector.blondeAt != null ? `blonde @ ${detector.blondeAt.toFixed(1)} s` : '';
+  const tgt = settings.targetAt;
+  const parts = [];
+  if (tgt > 0) parts.push(`target ${tgt} s`);
+  if (detector.blondeAt != null) {
+    parts.push(`blonde @ ${detector.blondeAt.toFixed(1)} s${tgt > 0 && detector.blondeAt < tgt ? ' (early)' : ''}`);
+  }
+  el.blondeAt.textContent = parts.join(' · ');
+  el.timer.classList.toggle('near', tgt > 0 && detector.state === 'pouring' && res.elapsed >= tgt - 3 && res.elapsed < tgt);
   // meter: 80% mark = blonde threshold
   el.meterFill.style.width = Math.min(100, res.progress * 80) + '%';
 }
@@ -361,7 +386,7 @@ function drawChart() {
   const plotTop = pad, plotBot = ch - ribbonH - axisH - pad;
   const samples = detector.samples;
   const elapsed = lastResult ? lastResult.elapsed : 0;
-  const tMax = Math.max(30, Math.ceil(elapsed + 2));
+  const tMax = Math.max(30, Math.ceil(elapsed + 2), settings.targetAt + 3);
   const X = (t) => pad + (t / tMax) * (cw - 2 * pad);
   // paleness (L* - C*) runs roughly -30 (dark, saturated) .. +80 (pale)
   const Y = (P) => plotBot - ((Math.max(-30, Math.min(80, P)) + 30) / 110) * (plotBot - plotTop);
@@ -404,6 +429,16 @@ function drawChart() {
     g.stroke();
   }
 
+  // target time
+  if (settings.targetAt > 0) {
+    const x = X(settings.targetAt);
+    g.strokeStyle = '#7bd389';
+    g.lineWidth = 1.5 * dpr;
+    g.setLineDash([3 * dpr, 3 * dpr]);
+    g.beginPath(); g.moveTo(x, plotTop); g.lineTo(x, ch - axisH); g.stroke();
+    g.setLineDash([]);
+  }
+
   // blonde marker
   if (detector.blondeAt != null) {
     const x = X(detector.blondeAt);
@@ -420,7 +455,8 @@ function saveShot() {
   const ribbon = [];
   for (let i = 0; i < N && s.length; i++) ribbon.push(s[Math.floor(i * s.length / N)].rgb);
   const hist = load('shotclock.history', []);
-  hist.unshift({ when: Date.now(), total: detector.elapsed(0), blondeAt: detector.blondeAt, ribbon });
+  hist.unshift({ when: Date.now(), total: detector.elapsed(0), blondeAt: detector.blondeAt,
+    target: settings.targetAt || null, ribbon });
   save('shotclock.history', hist.slice(0, 20));
   renderHistory();
 }
@@ -435,7 +471,9 @@ function renderHistory() {
   for (const h of hist.slice(0, 10)) {
     const li = document.createElement('li');
     const when = new Date(h.when).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    li.innerHTML = `<b>${h.total.toFixed(1)} s</b><span>${when}${h.blondeAt != null ? ` · blonde @ ${h.blondeAt.toFixed(1)} s` : ''}</span>`;
+    const early = h.blondeAt != null && h.target && h.blondeAt < h.target;
+    const blonde = h.blondeAt != null ? ` · blonde @ ${h.blondeAt.toFixed(1)} s${early ? ' <em class="early">early</em>' : ''}` : '';
+    li.innerHTML = `<b>${h.total.toFixed(1)} s</b><span>${when}${h.target ? ` · target ${h.target} s` : ''}${blonde}</span>`;
     const rib = document.createElement('div');
     rib.className = 'ribbon';
     if (h.ribbon.length) rib.style.background = `linear-gradient(90deg, ${h.ribbon.map((c) => `rgb(${c.join(',')})`).join(',')})`;

@@ -3,9 +3,11 @@
 A camera-based espresso shot timer. Point a phone or webcam at the stream and it:
 
 1. **Starts the timer on its own** when the shot starts, i.e. at the first liquid (not when the pump turns on).
-2. **Tracks the stream colour** through the shot (dark red-brown → caramel/orange → blonde) and plots it live.
-3. **Sounds an alert when the stream blondes**: three beeps, a spoken "cut the shot", and vibration on phones.
-4. Stops when the flow stops and saves the shot (time, blonde point, colour ribbon) to a local history.
+2. **Counts down to your target time** (default 25 s, measured from the first liquid) with 3-2-1 pips and a tone on the target.
+3. **Tracks the stream colour** through the shot (dark red-brown → caramel/orange → blonde) and plots it live.
+4. **Sounds an alert when the stream blondes**: three beeps, a spoken "cut the shot", and vibration on phones.
+   If it blondes *before* your target, the alert and the history flag it as **early**. That usually points to fast flow or channeling (light tamp, coarse grind).
+5. Stops when the flow stops and saves the shot (time, blonde point, colour ribbon) to a local history.
 
 Everything runs in the browser. There is no build step, no server-side processing, and nothing is uploaded.
 

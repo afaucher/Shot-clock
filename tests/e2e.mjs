@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Browser end-to-end check using Playwright + Chromium.
 //
-//   node tests/e2e.mjs [--file shot.webm] [--camera shot.mjpeg] [--shots DIR]
+//   node tests/e2e.mjs [--file shot.webm] [--camera shot.mjpeg] [--shots DIR] [--target 15]
 //
 // --file    loads the video through the "Video file" button
 // --camera  feeds the video as a fake webcam (Chromium flag) and uses "Camera"
@@ -19,6 +19,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const get = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
 const shotsDir = get('--shots');
+const TARGET = Number(get('--target') ?? 15);
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
 function serve() {
@@ -49,6 +50,8 @@ async function runCase(name, { launchArgs = [], setup }) {
   await page.goto(url);
   try {
     await setup(page);
+    // target before the synthetic clip's blonde point (~18.5 s), so blonding is not "early"
+    await page.fill('#optTarget', String(TARGET));
     await page.waitForFunction(() => !document.getElementById('btnArm').disabled, null, { timeout: 15000 });
     await page.click('#btnArm');
     await waitForEvent(page, 'armed', 10000);
@@ -67,7 +70,17 @@ async function runCase(name, { launchArgs = [], setup }) {
     }));
     const ev = Object.fromEntries(out.events.map((e) => [e.type, e]));
     const problems = [];
-    if (!out.sounds.includes('blonde')) problems.push('blonde sound not played');
+    const early = ev.blonde.elapsed < TARGET;
+    const reached = TARGET < ev.end.elapsed;
+    if (!out.sounds.includes(early ? 'blonde-early' : 'blonde')) problems.push(`expected ${early ? 'early ' : ''}blonde alert`);
+    const pips = out.sounds.filter((s) => s === 'pip').length;
+    const tgt = out.events.find((e) => e.type === 'target');
+    if (reached) {
+      if (pips !== 3) problems.push(`expected 3 countdown pips, got ${pips}`);
+      if (!tgt || Math.abs(tgt.elapsed - TARGET) > 0.2) problems.push(`target fired at ${tgt?.elapsed}`);
+    } else if (tgt) {
+      problems.push('target fired although the shot ended first');
+    }
     if (!out.sounds.includes('start')) problems.push('start sound not played');
     if (out.history < 1) problems.push('shot not saved to history');
     if (errors.length) problems.push('page errors: ' + errors.join(' | '));
