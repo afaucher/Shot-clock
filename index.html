@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#16110d">
+  <title>Shot Clock</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Shot Clock</h1>
+    <span id="status" class="status">Choose a source</span>
+  </header>
+
+  <main>
+    <section class="viewer">
+      <div class="stage" id="stage">
+        <canvas id="view"></canvas>
+        <div class="hint" id="hint">Start the camera or open a video of a shot</div>
+      </div>
+      <video id="video" playsinline muted></video>
+      <div class="source-row">
+        <button id="btnCamera">Camera</button>
+        <label class="button">Video file<input type="file" id="fileInput" accept="video/*" hidden></label>
+        <button id="btnArm" class="primary" disabled>Arm</button>
+      </div>
+      <p class="small">Drag on the picture to box the gap between the spout and the cup, then press <b>Arm</b> before you start the shot.</p>
+    </section>
+
+    <section class="readout">
+      <div class="timer" id="timer">0.0</div>
+      <div class="phase-row">
+        <span class="swatch" id="swatch"></span>
+        <span class="phase" id="phase">Idle</span>
+        <span class="blonde-at" id="blondeAt"></span>
+      </div>
+      <div class="meter"><div class="meter-fill" id="meterFill"></div><div class="meter-mark"></div></div>
+      <canvas id="chart" height="180"></canvas>
+      <div class="legend small"><span>colour of the stream over time</span><span>line = paleness (lightness − saturation), dashed = blonde threshold</span></div>
+    </section>
+
+    <details class="settings" open>
+      <summary>Settings</summary>
+      <div class="grid">
+        <label>Start timer on
+          <select id="optTrigger">
+            <option value="flow">First drip (camera)</option>
+            <option value="pump">Pump sound (microphone)</option>
+          </select>
+        </label>
+        <label>Blonde sensitivity <output id="outDelta"></output>
+          <input type="range" id="optDelta" min="8" max="60" step="1">
+          <span class="small">How much paler than its darkest point the stream must get. Lower = earlier alert.</span>
+        </label>
+        <label>Stream detection threshold <output id="outPix"></output>
+          <input type="range" id="optPix" min="10" max="120" step="1">
+          <span class="small">How different from the background a pixel must be.</span>
+        </label>
+        <label>Flow coverage <output id="outCov"></output>
+          <input type="range" id="optCov" min="0.01" max="0.4" step="0.01">
+          <span class="small">Share of the box that must be stream to count as pouring.</span>
+        </label>
+        <label>Backup alert at (s, 0 = off)
+          <input type="number" id="optBackup" min="0" max="90" step="1">
+        </label>
+        <label class="check"><input type="checkbox" id="optSound"> Sound</label>
+        <label class="check"><input type="checkbox" id="optSpeech"> Spoken "cut the shot"</label>
+        <label class="check"><input type="checkbox" id="optMask"> Show detected stream</label>
+        <button id="btnTest">Test alert</button>
+      </div>
+      <p class="small" id="camInfo"></p>
+      <p class="small" id="micInfo"></p>
+    </details>
+
+    <section class="history">
+      <h2>Recent shots</h2>
+      <ol id="history"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+.cert/
+node_modules/
+*.webm
+*.mjpeg
+*.mp4
+*.y4m
