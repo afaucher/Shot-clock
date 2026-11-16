@@ -78,6 +78,10 @@ node tests/e2e.mjs --file /tmp/shot.webm --camera /tmp/shot.mjpeg   # real Chrom
 
 The synthetic clip has its first drip at 1.5 s, starts blonding about 18 s into the shot, and stops at 24 s. Both browser paths (file and fake webcam) detect the start within 0.05 s, alert at 18.2–18.5 s, and report a 23.97 s shot.
 
+## Real footage
+
+`research/` holds the OpenCV prototype that finds and follows streams in handheld footage on its own (no box, no still camera), plus findings from the first real clip. In short: start the timer from pump audio, and calibrate blonding against each stream's own caramel-phase colour, not fixed numbers. See [research/README.md](research/README.md).
+
 ## Not done yet / ideas
 
 - Real-world thresholds are untested. The defaults come from reference colours and a synthetic clip, so expect to tune *Blonde sensitivity* on your first few shots.
