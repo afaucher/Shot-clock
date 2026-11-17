@@ -7,7 +7,7 @@ const el = {
   btnCamera: $('btnCamera'), fileInput: $('fileInput'), lblFile: $('lblFile'), btnArm: $('btnArm'), btnStop: $('btnStop'),
   timer: $('timer'), swatches: $('swatches'), phase: $('phase'), blondeAt: $('blondeAt'),
   meterFill: $('meterFill'), chart: $('chart'),
-  optDelta: $('optDelta'), outDelta: $('outDelta'), optTarget: $('optTarget'),
+  optDelta: $('optDelta'), outDelta: $('outDelta'), optTarget: $('optTarget'), optStreams: $('optStreams'),
   optSound: $('optSound'), optSpeech: $('optSpeech'), optMask: $('optMask'),
   btnTest: $('btnTest'), camInfo: $('camInfo'), perfInfo: $('perfInfo'), history: $('history'),
 };
@@ -29,6 +29,7 @@ function save(key, value) {
 const settings = Object.assign({
   blondeDelta: TRACKER_DEFAULTS.blondeDelta,
   targetAt: 25,
+  maxStreams: 2,
   sound: true,
   speech: true,
   showMask: true,
@@ -75,22 +76,24 @@ function loadOpenCv() {
 function bindSettings() {
   el.optDelta.value = settings.blondeDelta;
   el.optTarget.value = settings.targetAt;
+  el.optStreams.value = String(settings.maxStreams);
   el.optSound.checked = settings.sound;
   el.optSpeech.checked = settings.speech;
   el.optMask.checked = settings.showMask;
   const sync = () => {
     settings.blondeDelta = +el.optDelta.value;
     settings.targetAt = Math.max(0, +el.optTarget.value || 0);
+    settings.maxStreams = Math.max(1, Math.min(3, +el.optStreams.value || 2));
     settings.sound = el.optSound.checked;
     settings.speech = el.optSpeech.checked;
     settings.showMask = el.optMask.checked;
     el.outDelta.textContent = settings.blondeDelta;
-    tracker?.setOptions({ blondeDelta: settings.blondeDelta });
+    tracker?.setOptions({ blondeDelta: settings.blondeDelta, maxStreams: settings.maxStreams });
     sounds.enabled = settings.sound;
     sounds.speech = settings.speech;
     save('shotclock.settings.v2', settings);
   };
-  for (const k of ['optDelta', 'optTarget', 'optSound', 'optSpeech', 'optMask']) {
+  for (const k of ['optDelta', 'optTarget', 'optStreams', 'optSound', 'optSpeech', 'optMask']) {
     el[k].addEventListener('input', sync);
     el[k].addEventListener('change', sync);
   }
@@ -538,7 +541,7 @@ window.shotClock = { sounds, settings, eventLog, get tracker() { return tracker;
 
 loadOpenCv().then((m) => {
   cv = m;
-  tracker = new StreamTracker(cv, { blondeDelta: settings.blondeDelta });
+  tracker = new StreamTracker(cv, { blondeDelta: settings.blondeDelta, maxStreams: settings.maxStreams });
   window.shotClock.ready = true;
   el.btnCamera.disabled = false;
   el.fileInput.disabled = false;

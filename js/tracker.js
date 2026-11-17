@@ -26,7 +26,16 @@ export const TRACKER_DEFAULTS = {
   rerefShift: 0.08,      // ...or shifts more than this fraction of the frame
   newThreshold: 3.0,     // persistence threshold for "new line" evidence
   flowMin: 1.4,          // median flow score to establish a stream (liquid)
-  flowKeep: 1.1,         // lower score that keeps an established stream live (hysteresis)
+  flowKeep: 1.1,         // (legacy) lower flow that keeps a stream live
+  maxStreams: 2,         // show/use only the N most confident streams
+  weakFactor: 0.8,       // near an established stream, accept evidence down to this
+                         // fraction of newThreshold (continues streams, never starts one)
+  scoreConfirm: 6,       // track confidence (log-likelihood ratio) to confirm a stream
+  scoreKeep: 0,          // confidence below which a confirmed stream is dropped
+  swapMargin: 3,         // a challenger must beat an incumbent by this much...
+  swapHoldS: 0.5,        // ...for this long to take its place in the top N
+  pairWeight: 60,        // penalty per frame-height of top-end mismatch between chosen streams
+                         // (streams from one portafilter start at about the same height)
   confirmS: 2.0,         // a stream must stay present this long to start the clock
   lookbackS: 3.0,        // max backdating before the present-run start
   endS: 3.0,             // no live stream for this long = shot over
@@ -149,6 +158,9 @@ class Track {
     this.recent = [t];
     this.runStart = null;
     this.flows = [];
+    this.score = 0;              // running log-likelihood ratio "real stream vs artefact"
+    this.peak = 0;
+    this.cxHist = [];            // [t, cx] over the last second (anchoring)
     this.stream = null;
   }
 
@@ -275,15 +287,23 @@ export class StreamTracker {
     // enough agreeing points for a 4-parameter fit (not a majority: parallax
     // between portafilter and cups means one model never fits every point)
     if (!r || r.inliers < 25) return null;
+    this.regInliers = r.inliers;
     return mul3(r.M, pred);
   }
 
   _register(gray) {
     // Fast path: assume little motion since the last frame and refine against
     // the reference with a deeper pyramid (handles a few px of shake).
+    const old = this.T;
+    this.regInliers = 0;
     let T = this._refine(gray, this.T, 3);
     if (!T) { T = this._registerSlow(gray); this.slowStreak = (this.slowStreak || 0) + 1; } else this.slowStreak = 0;
     this.T = T;
+    // camera motion this frame (px at working resolution) and how much to
+    // trust this frame's registration (0..1)
+    this.motion = Math.hypot(T[2] - old[2], T[5] - old[5])
+      + Math.abs(Math.hypot(T[0], T[3]) - Math.hypot(old[0], old[3])) * Math.max(this.W, this.H);
+    this.regConf = Math.max(0.2, Math.min(1, this.regInliers / 60));
     gray.copyTo(this.prevGray);
   }
 
@@ -344,17 +364,31 @@ export class StreamTracker {
     // mask every established stream seen recently (not just this frame's
     // detections: a stream missed in this one frame would otherwise be
     // absorbed into the new reference and cancelled)
-    const keep = this.tracks.filter((tr) => tr.box && tr.stream?.established && t - tr.last < 1.5).map((tr) => tr.box);
+    // the union of each stream's boxes over the last 1.5 s: a single box often
+    // covers only part of a stream, and streams sway
+    const keep = [];
+    for (const tr of this.tracks) {
+      if (!tr.stream?.established || t - tr.last >= 1.5 || !tr.boxes?.length) continue;
+      const bs = tr.boxes.map((q) => q[1]);
+      const x0 = Math.min(...bs.map((b) => b[0])), y0 = Math.min(...bs.map((b) => b[1]));
+      const x1 = Math.max(...bs.map((b) => b[0] + b[2])), y1 = Math.max(...bs.map((b) => b[1] + b[3]));
+      keep.push([x0, y0, x1 - x0, y1 - y0]);
+    }
     for (const d of this.lastDetections) keep.push(d.box);
     for (const tr of this.tracks) [tr.cx, tr.cy] = mapX(tr.cx, tr.cy);
-    for (const s of this.streams) [s.cx, s.cy] = mapX(s.cx, s.cy ?? H / 2);
+    for (const s of this.streams) {
+      const top = mapX(s.cx, s.top ?? 0)[1];
+      [s.cx, s.cy] = mapX(s.cx, s.cy ?? H / 2);
+      s.top = top;
+      s.tops = [[t, top]];
+    }
     const boxes = [];
     for (const box of keep) {
       const [x, y, w, h] = box;
       const pts = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => mapX(px, py));
       const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-      boxes.push([Math.floor(Math.min(...xs)) - 6, Math.floor(Math.min(...ys)) - 6,
-        Math.ceil(Math.max(...xs)) + 6, Math.ceil(Math.max(...ys)) + 6]);
+      boxes.push([Math.floor(Math.min(...xs)) - 10, Math.floor(Math.min(...ys)) - 10,
+        Math.ceil(Math.max(...xs)) + 10, Math.ceil(Math.max(...ys)) + 10]);
     }
     // carry persistence over (warp old-reference map into current coordinates)
     const src = cv.matFromArray(H, W, cv.CV_32F, this.persist);
@@ -363,7 +397,7 @@ export class StreamTracker {
     cv.warpAffine(src, dst, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0));
     const persist = Float32Array.from(dst.data32F);
     src.delete(); dst.delete(); M.delete();
-    for (const tr of this.tracks) tr.box = null;     // old coordinates
+    for (const tr of this.tracks) { tr.box = null; tr.boxes = []; tr.cxHist = []; }   // old coordinates
     this.lastDetections = [];
     this._setReference(gray, this.refT0, boxes);
     this.persist = persist;
@@ -499,10 +533,18 @@ export class StreamTracker {
     const refD = this.refLinesD.data32F, persist = this.persist, mask = m.mask.data;
     // persistence with a ~0.2 s time constant (0.85/frame at 30 fps)
     const keep = Math.exp(-dt / 0.2);
+    // Weak evidence may continue an established top-N stream but never start
+    // one (as in ByteTrack): near those streams the threshold is lower.
+    const near = new Uint8Array(W);
+    for (const st of this.streams) {
+      if (!st.inTop) continue;
+      for (let x = Math.max(0, Math.floor(st.cx - 12)); x <= Math.min(W - 1, Math.ceil(st.cx + 12)); x++) near[x] = 1;
+    }
+    const weakT = o.weakFactor * o.newThreshold;
     for (let i = 0; i < n; i++) {
       const nw = Math.max(lm[i] - 1.2 * refD[i], 0);
       persist[i] = persist[i] * keep + nw * (1 - keep);
-      mask[i] = persist[i] > o.newThreshold ? 1 : 0;
+      mask[i] = persist[i] > (near[i % W] ? weakT : o.newThreshold) ? 1 : 0;
     }
     const ncc = cv.connectedComponentsWithStats(m.mask, m.labels, m.stats, m.cents, 8, cv.CV_32S);
     const stats = m.stats.data32S, labels = m.labels.data32S, validE = m.validE.data;
@@ -511,7 +553,10 @@ export class StreamTracker {
     const dets = [];
     for (let k = 1; k < ncc; k++) {
       const x = stats[k * 5], y = stats[k * 5 + 1], w = stats[k * 5 + 2], h = stats[k * 5 + 3], area = stats[k * 5 + 4];
-      if (h < 10 || h < 2 * w || area < 15) continue;
+      const nearTop = near[Math.min(W - 1, Math.round(x + w / 2))] === 1;
+      // tall and thin; looser near an established stream (sprays, thin late streams)
+      const strongShape = h >= 10 && h >= 2 * w && area >= 15;
+      if (!strongShape && !(nearTop && o.weakFactor < 1 && h >= 6 && h >= 1.2 * w && area >= 8)) continue;
       const compIdx = [], lmv = [];
       for (let yy = y; yy < y + h; yy++) {
         for (let xx = x; xx < x + w; xx++) {
@@ -570,9 +615,17 @@ export class StreamTracker {
       const keep = scored.slice(0, Math.max(3, scored.length >> 1));
       const contrast = keep.length ? median(keep.map((k) => k[0])) : 0;
       const pix = keep.length ? keep.map((k) => k[1]) : core;
+      // share of bright, colourless pixels: specular highlights on chrome take
+      // the light's colour; coffee never does
+      let hl = 0;
+      for (const i of core) if (Lf[i] > 85 && Math.abs(Af[i]) + Math.abs(Bf[i]) < 16) hl++;
+      let strongPx = 0;
+      for (const i of core) if (persist[i] > o.newThreshold) strongPx++;
+      // weak detections keep a stream alive but don't give colour samples
+      const weak = !strongShape || strongPx < 0.5 * core.length;
       dets.push({
-        cx: x + w / 2, box: [x, y, w, h], core, flow, contrast,
-        colorOk: contrast >= o.minContrast,
+        cx: x + w / 2, box: [x, y, w, h], core, flow, contrast, highlight: hl / core.length, weak,
+        colorOk: contrast >= o.minContrast && !weak,
         L: median(pix.map((i) => Lf[i])), a: median(pix.map((i) => Af[i])), b: median(pix.map((i) => Bf[i])),
       });
     }
@@ -588,11 +641,14 @@ export class StreamTracker {
       if (!best) {
         best = new Track(this.nextTrackId++, d.cx, cy, t);
         best.box = d.box;
+        best.boxes = [[t, d.box]];
         this.tracks.push(best);
       } else {
         best.cx = best.cx * 0.8 + d.cx * 0.2;
         best.cy = best.cy * 0.8 + cy * 0.2;
         best.box = d.box;
+        (best.boxes ||= []).push([t, d.box]);
+        while (best.boxes.length && t - best.boxes[0][0] > 1.5) best.boxes.shift();
         best.hits++;
         best.last = t;
         best.recent.push(t);
@@ -600,20 +656,29 @@ export class StreamTracker {
       d.track = best;
       best.flows.push(d.flow);
       if (best.flows.length > 120) best.flows.shift();
+      best.matched = d;
       if (best.confirmed(fps) && !best.stream && best.flowing(o.flowMin, fps)) {
         let s = null;
         for (const st of this.streams) if (Math.abs(st.cx - best.cx) < 20 && (!s || Math.abs(st.cx - best.cx) < Math.abs(s.cx - best.cx))) s = st;
         if (!s) {
-          s = { id: this.streams.length + 1, cx: best.cx, cy: best.cy, flows: [], samples: [], baseline: null, smoothP: null, established: false };
+          s = { id: this.streams.length + 1, cx: best.cx, cy: best.cy, top: d.box[1], flows: [], samples: [], baseline: null, smoothP: null, established: false, score: 0, inTop: false };
           this.streams.push(s);
         }
         best.stream = s;
       }
       if (best.stream) {
+        // where the stream starts (spout tip): median of the last 2 s, so a
+        // stray detection joining the stream can't move it
+        const st = best.stream;
+        (st.tops ||= []).push([t, d.box[1]]);
+        while (st.tops.length && t - st.tops[0][0] > 2) st.tops.shift();
+        st.top = median(st.tops.map((q) => q[1]));
         best.stream.flows.push(d.flow);
         if (best.stream.flows.length > 300) best.stream.flows.shift();
       }
     }
+
+    this._score(t, dt);
 
     // ---- shot start (first liquid), confirmed by a present, flowing stream
     this.candidateStart = null;
@@ -643,8 +708,7 @@ export class StreamTracker {
       // being seen in place (hysteresis). Late in a shot streams thin out and
       // run smooth, and moving light around them lowers the flow score, so
       // re-checking flow every frame would drop real streams.
-      if (s && !s.established && s.flows.length >= Math.max(5, fps) && median(s.flows) >= o.flowMin) s.established = true;
-      if (!s || !s.established || !d.track.flowing(o.flowKeep, fps)) continue;
+      if (!s || !s.inTop || d.track.score < o.scoreKeep) continue;
       const C = Math.hypot(d.a, d.b);
       d.stream = s;
       d.P = d.L - C;
@@ -670,16 +734,101 @@ export class StreamTracker {
     return this._result(t, events);
   }
 
+  // Track confidence as a running log-likelihood ratio (as in radar track
+  // scoring / SPRT): each frame adds evidence for or against "real stream",
+  // misses cost a little, frames with poor registration count less. Streams
+  // are confirmed above scoreConfirm and only the top N are shown and used.
+  _score(t, dt) {
+    const o = this.opts;
+    const k = dt * 15 * (this.regConf ?? 1);        // per 1/15 s, scaled by registration trust
+    const still = 1 / (1 + (this.motion || 0) / 2); // 1 when the camera is still
+    // streams seen this frame through any of their tracks: a stream often
+    // splits into two tracks that take turns, which is not a miss
+    const seen = new Set(this.tracks.filter((tr) => tr.matched && tr.last === t && tr.stream).map((tr) => tr.stream));
+    for (const tr of this.tracks) {
+      const d = tr.matched;
+      tr.matched = null;
+      let inc;
+      if (d && tr.last === t) {
+        // flow: liquid keeps changing; positive evidence only counts fully
+        // while the camera is still (highlights/parallax change with motion)
+        let lf = Math.max(-2, Math.min(2, 2.5 * Math.log(d.flow / 1.3)));
+        if (lf > 0) lf *= still;
+        // anchoring: a stream hangs from a fixed spout, so its x barely moves
+        // in scene coordinates; reflections and highlights drift
+        tr.cxHist.push([t, d.cx]);
+        while (tr.cxHist.length && t - tr.cxHist[0][0] > 1) tr.cxHist.shift();
+        let la = 0;
+        if (tr.cxHist.length >= 5) {
+          const xs = tr.cxHist.map((h) => h[1]);
+          const mu = xs.reduce((a, b) => a + b, 0) / xs.length;
+          const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / xs.length);
+          la = sd < 1.5 ? 0.3 : sd > 4 ? -0.8 : 0.3 - 1.1 * (sd - 1.5) / 2.5;
+        }
+        const lh = -Math.min(2, 3 * d.highlight);
+        inc = lf + la + lh;
+      } else {
+        inc = tr.stream && seen.has(tr.stream) ? 0 : -0.4;   // missed this frame
+      }
+      tr.score = Math.max(-6, Math.min(30, tr.score + inc * k));
+      tr.peak = Math.max(tr.peak, tr.score);
+    }
+    // stream confidence = its best track; confirm, then pick the top N
+    for (const s of this.streams) s.score = -Infinity;
+    for (const tr of this.tracks) if (tr.stream) tr.stream.score = Math.max(tr.stream.score, tr.score);
+    for (const s of this.streams) {
+      if (s.score === -Infinity) s.score = -6;
+      if (!s.established && s.score >= o.scoreConfirm) s.established = true;
+    }
+    const eligible = this.streams.filter((s) => s.established && s.score >= o.scoreKeep);
+    for (const s of this.streams) if (!eligible.includes(s)) s.inTop = false;
+    // Choose the best set of N jointly: confidence + a bonus for incumbents
+    // (no flicker) - a penalty when the chosen streams start at very
+    // different heights (pair prior: one portafilter, spouts side by side;
+    // rejects reflections low in the cup that flicker just like a stream).
+    const n = Math.min(o.maxStreams, eligible.length);
+    let best = null, bestVal = -Infinity;
+    const H = this.H;
+    const choose = (startIdx, picked) => {
+      if (picked.length === n) {
+        let v = 0;
+        for (const p of picked) v += p.score + (p.inTop ? o.swapMargin : 0);
+        for (let i = 0; i < picked.length; i++) {
+          for (let j = i + 1; j < picked.length; j++) v -= o.pairWeight * Math.abs(picked[i].top - picked[j].top) / H;
+        }
+        if (v > bestVal) { bestVal = v; best = picked.slice(); }
+        return;
+      }
+      for (let i = startIdx; i < eligible.length; i++) { picked.push(eligible[i]); choose(i + 1, picked); picked.pop(); }
+    };
+    if (n > 0) choose(0, []);
+    const current = eligible.filter((s) => s.inTop);
+    const same = best && best.length === current.length && best.every((s) => s.inTop);
+    if (!best) {
+      this.pendingTop = null;
+    } else if (same) {
+      this.pendingTop = null;
+    } else if (current.length < n && current.every((s) => best.includes(s))) {
+      for (const s of best) s.inTop = true;          // only filling empty slots: no wait
+      this.pendingTop = null;
+    } else {
+      const key = best.map((s) => s.id).sort().join(',');
+      if (!this.pendingTop || this.pendingTop.key !== key) this.pendingTop = { key, since: t };
+      if (t - this.pendingTop.since >= o.swapHoldS) {
+        for (const s of eligible) s.inTop = best.includes(s);
+        this.pendingTop = null;
+      }
+    }
+  }
+
   // Blonding per stream: median paleness over the last smoothS seconds,
   // relative to that stream's lowest smoothed paleness after settling.
   _blonde(t, events) {
     const o = this.opts;
     let bestProg = 0, bestStream = null;
-    // only the main streams: established, with a good share of the samples
-    // (keeps short-lived artefacts such as chrome highlights out of the alert)
-    const most = Math.max(0, ...this.streams.map((s) => s.samples.length));
+    // only the top-N (most confident) streams
     for (const s of this.streams) {
-      if (!s.established || s.samples.length < 0.25 * most) { s.progress = 0; continue; }
+      if (!s.inTop) { s.progress = 0; continue; }
       const recent = [];
       for (let i = s.samples.length - 1; i >= 0 && t - s.samples[i].t <= o.smoothS; i--) recent.push(s.samples[i].P);
       if (recent.length < Math.max(3, this.fps * o.smoothS * 0.25)) { s.progress = 0; continue; }

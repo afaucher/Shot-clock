@@ -85,6 +85,48 @@ Problems clip 3 exposed, now fixed in `js/tracker.js`:
 
 What the colour shows: in all four shots paleness rises gradually through the shot, with levels that differ by setup and between the two spouts of the same shot. Clips 3 and 4 stop recording 21–23 s into the shot, so they don't reach a 25 s target. For calibration, recordings should run until after the pump stops.
 
+## Stream recognition: research and the confidence/top-N tracker
+
+Web research brief (multi-target tracking, moving-camera change detection, specular highlights, liquid detection; sources in the commit history of this file's discussion):
+- The pipeline's structure (motion compensation → "new structure" with a tolerance window → persistence → tracking) is the standard one for moving cameras. The weak point was **fixed thresholds on a single cue**.
+- The standard fix is a **running track score**, a log-likelihood ratio accumulated per frame and confirmed or deleted like a sequential probability ratio test (Blackman & Popoli; MATLAB `trackScoreLogic`). Miss penalties, and evidence weighted by registration confidence.
+- ByteTrack's lesson: **weak detections may continue a confirmed track but never start one**.
+- Scene priors: change that only happens while the camera moves is viewpoint-dependent (highlights, parallax, reflections). Streams are anchored at the spouts in scene coordinates. Two spouts give a **pair** of streams starting at about the same height.
+- Highlights take the light's colour (low chroma, very bright, often clipped).
+- No published espresso work was found. Robot-pouring work uses learned segmentation, often bootstrapped from classical labels, which is a route for later once there is data.
+
+Implemented in `js/tracker.js`:
+1. Per-track confidence (LLR). Each frame adds:
+   - flow `±2.5·ln(flow/1.3)`, capped at ±2, with the positive part scaled by camera stillness;
+   - anchoring (x spread over 1 s: +0.3 below 1.5 px, −0.8 above 4 px);
+   - highlight share (−3 × fraction of bright, colourless pixels);
+   - −0.4 per missed frame, but no penalty when a sibling track of the same stream was seen.
+
+   The total is scaled by registration confidence. Streams confirm at 6 and drop below 0.
+2. **Top N chosen jointly** (`maxStreams`, default 2): the sum of confidences, plus +3 for incumbents, minus 60 × top-end height mismatch as a fraction of frame height. A changed selection must hold 0.5 s. Stream tops are a 2 s median, so a stray detection can't move them.
+3. **Weak continuation**: near a top-N stream, persistence down to 0.8× the threshold and a looser shape are accepted. Weak detections keep the stream alive but give no colour samples.
+4. Re-reference masks use the union of each stream's boxes over the last 1.5 s, plus 10 px.
+
+Measured with `tools/eval.mjs` on the four clips (all have two spouts):
+
+| | Before | After |
+|---|---|---|
+| Frames showing more streams than spouts | clip 2: 73% | 0% on all clips |
+| Distinct streams ever shown | 2 / 3 / 3 / 2 | 2 / 2 / 2 / 2 |
+| Tracked share, weaker stream | clip 1: 29%, clip 4: 43% (see note) | clip 1: 59%, clip 4: 94% |
+| Shot start error | 0.00 / +0.04 / 0.00 / 0.00 s | 0.00 / −0.13 / 0.00 / 0.00 s (clip 2: 10.00 s, first drop ~9.9 s) |
+
+The "before" tracked figures were measured with the new scoring but without weak continuation. Clip 3's tracked share dropped (90/85% → 82/75%).
+
+**These numbers move noticeably with small parameter changes, which is the clearest sign that four clips are not enough to tune on.**
+
+Next, in the order the research ranked them:
+1. Clipped/highlight pixels out of the line map and KLT corners.
+2. Gravity alignment from the phone's motion sensors (`DeviceMotionEvent`), to require near-vertical streams and handle roll.
+3. Several reference keyframes against parallax.
+4. A column-integrated track-before-detect profile for faint streams.
+5. Later, a small learned verifier on space-time patches, trained on labels the classical pipeline generates.
+
 ## Known gaps
 
 - During the 11–16 s refocus, the left stream is sometimes missed and a short false detection appears on the "INSERT" label. Persistence filtering keeps these out of the results and out of the shot start.

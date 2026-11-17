@@ -47,6 +47,7 @@ Settings: target time, blonde sensitivity (experimental), sound, spoken alerts, 
 | Camera motion | KLT corners and optical flow, fitted with a RANSAC similarity transform to a reference frame taken at Arm. Drift-free, so hand shake is cancelled. |
 | Candidates | A thin vertical line map in Lab, minus the reference's line map dilated by a few px. Edges that were there before the shot (chrome, cup rims) cancel even with parallax. |
 | Liquid or not | A **flow score**: frame-to-frame change inside a candidate vs a ring around it. Falling coffee keeps changing; reflections on stainless only move with the camera. On real clips, streams scored 1.7–2.3 and artefacts 0.6–1.1. |
+| Confidence, top N | Each track has a running **confidence score** (log-likelihood ratio, as in radar track scoring), built from several cues: flow (counted fully only while the camera is still), anchoring in scene coordinates, highlight-like pixels, missed frames, and registration quality. Only the **N most confident streams** (setting, default 2) are shown and used. They're chosen together, so streams that start at very different heights (e.g. a reflection low in the cup) don't pair up, and a challenger must clearly win for 0.5 s to take a slot. Weaker evidence may continue a chosen stream but never start one. |
 | Shot start | A stream seen in about two-thirds of frames for 2 s confirms the shot. The clock is backdated to its first appearance. Thresholds are time-based, so slower phones behave the same. |
 | Colour | Median Lab of each stream's core pixels. **Paleness = L\* − chroma.** |
 | Blonding | A stream's paleness (1 s median) rising *Blonde sensitivity* points above its own baseline, held for 1 s. Compares each stream with itself, because absolute colour varies a lot between setups. |
@@ -59,6 +60,7 @@ Speed: about 27 ms/frame in Node and 31–35 ms/frame in headless Chromium on a 
 
 ```bash
 node tools/track.mjs shot.mp4 --arm 1.0      # run the browser tracker on a video file, print events + colour table
+node tools/eval.mjs --dir ~/shot-clips       # score the tracker on the real clips in data/clips.json (videos kept outside the repo)
 npm test                                     # unit tests (geometry, colour)
 python3 tests/make_test_video.py /tmp/shot.webm             # synthetic shot (needs numpy + ffmpeg)
 python3 tests/make_test_video.py /tmp/shot.mjpeg --lead 5   # same, as a fake webcam feed

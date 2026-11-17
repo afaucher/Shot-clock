@@ -49,6 +49,14 @@
           <input type="number" id="optTarget" min="0" max="90" step="1">
           <span class="small">Counted from the first liquid. Pips at 3-2-1, a tone on the target. 0 = off.</span>
         </label>
+        <label>Streams to track
+          <select id="optStreams">
+            <option value="1">1 (single spout / bottomless)</option>
+            <option value="2">2 (double spout)</option>
+            <option value="3">3</option>
+          </select>
+          <span class="small">Only the most confident streams are shown and used.</span>
+        </label>
         <label>Blonde sensitivity <output id="outDelta"></output>
           <input type="range" id="optDelta" min="5" max="40" step="1">
           <span class="small">Experimental, not yet calibrated: how much paler than its own baseline a stream must get. Lower = earlier alert.</span>
