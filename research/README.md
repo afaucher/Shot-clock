@@ -67,8 +67,27 @@ Takeaways across the two clips:
 - **Absolute colour values differ a lot between setups** (clip 2 paleness sits about 15 points lower throughout). Anything we alert on has to be relative to the shot itself.
 - The **shape over time differs between a poor and a better shot** (early jump, then flat, vs a steady climb). That is the signal worth learning, and it needs many labelled shots.
 
+## Clips 3 and 4, and what four shots show
+
+| Clip | Setup | First liquid (browser tracker) | From the frames |
+|---|---|---|---|
+| 1 | warm light, black cup + mug, hand-held, under-tamped | 10.27 s | ✓ |
+| 2 | red-lined mug, stainless, hand-held | 10.17 s | ✓ (~10.0–10.1 s) |
+| 3 | **daylight with dappled sun moving over a white cup**, hand-held, camera re-framed after starting | 8.93 s | ✓ (nothing at 8.5 s, drops at 8.9 s) |
+| 4 | patterned mug, further back, steadier, 360p | 9.57 s | ✓ (nothing at 9.3 s, streams at 9.57 s) |
+
+Same settings on all four; start within about 0.2 s every time.
+
+Problems clip 3 exposed, now fixed in `js/tracker.js`:
+- **Re-referencing.** Hand-held through a whole shot, the view drifted up to 11% in scale and 18% in position. Parallax and newly visible areas then looked "new", and streams were lost. When the view drifts more than 4% in scale or 8% of the frame in position, the tracker re-references: re-learning the scene if nothing is flowing yet, or, mid-shot, taking the current view as the reference with the tracked streams masked out (so they aren't absorbed) and moving tracks into the new coordinates.
+- **Hysteresis.** Late in a shot, streams thin out and run smooth, and moving sunlight around them lowers the flow score. Re-checking flow ≥ 1.4 every frame dropped them and ended the shot at 13 s. Now flow ≥ 1.4 (over 1 s) *establishes* a stream, and ≥ 1.1 keeps it live.
+- **Colour sampling.** Each stream's colour comes from the core pixels that differ most from the background *in the same rows*. A sample is skipped when the stream barely stands out (ΔE < 6). The blonde check only considers the main streams, so chrome highlights can't trigger it.
+
+What the colour shows: in all four shots paleness rises gradually through the shot, with levels that differ by setup and between the two spouts of the same shot. Clips 3 and 4 stop recording 21–23 s into the shot, so they don't reach a 25 s target. For calibration, recordings should run until after the pump stops.
+
 ## Known gaps
 
 - During the 11–16 s refocus, the left stream is sometimes missed and a short false detection appears on the "INSERT" label. Persistence filtering keeps these out of the results and out of the shot start.
 - Clip 2's left stream sometimes samples the stainless behind it (chroma drops from 18 s on). Sampling should use only the stream's core along its fitted centre line.
-- **Two clips is nowhere near enough.** Every threshold here (2 s confirmation, flow ≥ 1.4, line filter scale) was checked on two shots. Accurate detection needs a dataset of many labelled shots and an evaluation harness that scores every change against all of them.
+- Short colour blips remain (a second or two on clips 2 and 3), and a moving chrome highlight can still become a short-lived extra "stream".
+- **Four clips is nowhere near enough.** Every threshold here (2 s confirmation, flow ≥ 1.4 / 1.1, re-reference limits, line filter scale) was checked on four shots. Accurate detection needs a dataset of many labelled shots and an evaluation harness that scores every change against all of them.

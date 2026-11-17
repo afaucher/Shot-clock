@@ -50,7 +50,8 @@ Settings: target time, blonde sensitivity (experimental), sound, spoken alerts, 
 | Shot start | A stream seen in about two-thirds of frames for 2 s confirms the shot. The clock is backdated to its first appearance. Thresholds are time-based, so slower phones behave the same. |
 | Colour | Median Lab of each stream's core pixels. **Paleness = L\* − chroma.** |
 | Blonding | A stream's paleness (1 s median) rising *Blonde sensitivity* points above its own baseline, held for 1 s. Compares each stream with itself, because absolute colour varies a lot between setups. |
-| End | No flowing stream for 2 s, or **Stop**. |
+| Hand-held drift | When the view zooms more than 4% or shifts more than 8% from the reference, it re-references (re-learns the scene before the shot; mid-shot, it masks the tracked streams out of the new reference). |
+| End | No live stream for 3 s, or **Stop**. Flow ≥ 1.4 establishes a stream; ≥ 1.1 keeps it live. |
 
 Speed: about 27 ms/frame in Node and 31–35 ms/frame in headless Chromium on a server CPU. Phones vary.
 
@@ -66,7 +67,7 @@ node tests/e2e.mjs --file /tmp/shot.webm --camera /tmp/shot.mjpeg   # real Chrom
 
 ## Research and real footage
 
-`research/` holds the Python/OpenCV prototype this tracker was ported from, and findings from two real hand-held clips. Both times the start was correct to within about 0.2 s and both spouts were tracked with the same settings, but the colour curves of a poor and a better shot differ a lot. See [research/README.md](research/README.md).
+`research/` holds the Python/OpenCV prototype this tracker was ported from, and findings from four real clips (warm light, red mug + stainless, dappled daylight, further back at 360p). The start was correct to within about 0.2 s every time, with the same settings. Colour rises gradually in every shot, but its level depends on the setup. See [research/README.md](research/README.md).
 
 ## Not done yet
 

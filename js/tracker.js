@@ -22,15 +22,20 @@
 export const TRACKER_DEFAULTS = {
   width: 270,            // working width (px)
   refLearnS: 1.0,        // learn the reference line map for this long after arm()
+  rerefScale: 0.04,      // re-reference when the view zooms more than this...
+  rerefShift: 0.08,      // ...or shifts more than this fraction of the frame
   newThreshold: 3.0,     // persistence threshold for "new line" evidence
-  flowMin: 1.4,          // median flow score for a track to count as liquid
+  flowMin: 1.4,          // median flow score to establish a stream (liquid)
+  flowKeep: 1.1,         // lower score that keeps an established stream live (hysteresis)
   confirmS: 2.0,         // a stream must stay present this long to start the clock
   lookbackS: 3.0,        // max backdating before the present-run start
-  endS: 2.0,             // no flowing stream for this long = shot over
+  endS: 3.0,             // no live stream for this long = shot over
   settleS: 2.0,          // ignore colour for blonding baseline in the first seconds
   smoothS: 1.0,          // median window for stream colour
   blondeDelta: 15,       // paleness rise above a stream's baseline = blonde
   blondeHoldS: 1.0,      // must stay blonde this long
+  minContrast: 6,        // a stream must differ this much (ΔE) from its local
+                         // background for its colour to be trusted
 };
 
 // ---------------------------------------------------------------- geometry
@@ -134,9 +139,10 @@ export function labToRgb(L, a, b) {
 
 // ---------------------------------------------------------------- tracker
 class Track {
-  constructor(id, cx, t) {
+  constructor(id, cx, cy, t) {
     this.id = id;
     this.cx = cx;
+    this.cy = cy;
     this.hits = 1;
     this.first = t;
     this.last = t;
@@ -276,7 +282,7 @@ export class StreamTracker {
     // Fast path: assume little motion since the last frame and refine against
     // the reference with a deeper pyramid (handles a few px of shake).
     let T = this._refine(gray, this.T, 3);
-    if (!T) T = this._registerSlow(gray);
+    if (!T) { T = this._registerSlow(gray); this.slowStreak = (this.slowStreak || 0) + 1; } else this.slowStreak = 0;
     this.T = T;
     gray.copyTo(this.prevGray);
   }
@@ -300,6 +306,68 @@ export class StreamTracker {
     const pred = mul3(this.T, step);
     this.slowCount = (this.slowCount || 0) + 1;
     return this._refine(gray, pred, 2) || pred;
+  }
+
+  // ---- reference ----------------------------------------------------------
+  // boxes: regions to keep reference points out of (streams being tracked:
+  // features on moving coffee would make registration follow the stream)
+  _setReference(gray, t, boxes = []) {
+    const cv = this.cv, n = this.W * this.H;
+    for (const k of ['refGray', 'prevGray', 'refPts']) if (this[k]) { this[k].delete(); this[k] = null; }
+    this.refGray = gray.clone();
+    this.prevGray = gray.clone();
+    this.refPts = new cv.Mat();
+    let mask = this.m.empty;
+    if (boxes.length) {
+      mask = new cv.Mat(this.H, this.W, cv.CV_8UC1, new cv.Scalar(255));
+      for (const [x0, y0, x1, y1] of boxes) {
+        cv.rectangle(mask, new cv.Point(x0, y0), new cv.Point(x1, y1), new cv.Scalar(0), -1);
+      }
+    }
+    cv.goodFeaturesToTrack(this.refGray, this.refPts, 200, 0.01, 7, mask, 5);
+    if (mask !== this.m.empty) mask.delete();
+    this.T = I3();
+    this.refT0 = t;
+    this.slowStreak = 0;
+    this.persist = new Float32Array(n);
+    this.prevLab = null;
+  }
+
+  // Re-reference mid-shot: the current view becomes the reference. Tracks,
+  // streams and persistence move into the new coordinates, and the streams
+  // being tracked are masked out of the new reference lines so they are not
+  // absorbed into "what was already there".
+  _rereference(gray, t) {
+    const cv = this.cv, W = this.W, H = this.H;
+    const Ti = invertAffine(this.T);              // old reference -> current frame
+    const mapX = (x, y) => applyAffine(Ti, x, y);
+    // mask every established stream seen recently (not just this frame's
+    // detections: a stream missed in this one frame would otherwise be
+    // absorbed into the new reference and cancelled)
+    const keep = this.tracks.filter((tr) => tr.box && tr.stream?.established && t - tr.last < 1.5).map((tr) => tr.box);
+    for (const d of this.lastDetections) keep.push(d.box);
+    for (const tr of this.tracks) [tr.cx, tr.cy] = mapX(tr.cx, tr.cy);
+    for (const s of this.streams) [s.cx, s.cy] = mapX(s.cx, s.cy ?? H / 2);
+    const boxes = [];
+    for (const box of keep) {
+      const [x, y, w, h] = box;
+      const pts = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => mapX(px, py));
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      boxes.push([Math.floor(Math.min(...xs)) - 6, Math.floor(Math.min(...ys)) - 6,
+        Math.ceil(Math.max(...xs)) + 6, Math.ceil(Math.max(...ys)) + 6]);
+    }
+    // carry persistence over (warp old-reference map into current coordinates)
+    const src = cv.matFromArray(H, W, cv.CV_32F, this.persist);
+    const dst = new cv.Mat();
+    const M = cv.matFromArray(2, 3, cv.CV_64F, Ti.slice(0, 6));
+    cv.warpAffine(src, dst, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0));
+    const persist = Float32Array.from(dst.data32F);
+    src.delete(); dst.delete(); M.delete();
+    for (const tr of this.tracks) tr.box = null;     // old coordinates
+    this.lastDetections = [];
+    this._setReference(gray, this.refT0, boxes);
+    this.persist = persist;
+    this._pendingRef = boxes;
   }
 
   // ---- line map -----------------------------------------------------------
@@ -347,17 +415,35 @@ export class StreamTracker {
 
     if (this._wantRef) {
       this._wantRef = false;
-      this.refGray = m.gray.clone();
-      this.prevGray = m.gray.clone();
-      this.refPts = new cv.Mat();
-      cv.goodFeaturesToTrack(this.refGray, this.refPts, 200, 0.01, 7, m.empty, 5);
-      this.T = I3();
-      this.refT0 = t;
-      this.persist = new Float32Array(n);
+      this._setReference(m.gray, t);
       return this._result(t, events);
     }
 
     this._register(m.gray);
+
+    // The further the view drifts from the reference (zoom, big shifts while
+    // hand-held), the more parallax and newly visible areas look "new".
+    // Re-reference when that happens.
+    const Tm = this.T;
+    const drift = Math.abs(Math.hypot(Tm[0], Tm[3]) - 1) > o.rerefScale
+      || Math.hypot(Tm[2], Tm[5]) > o.rerefShift * Math.max(W, H);
+    if (drift && (this.state === 'armed' || this.state === 'pouring') && t - (this.lastReref ?? -1e9) > 1.0) {
+      this.lastReref = t;
+      const flowing = this.streams.some((s) => s.established) || this.tracks.some((tr) => tr.dense(t, fps));
+      if (this.state === 'armed' && !flowing) {
+        // nothing flowing yet (e.g. still framing the shot): learn the scene again
+        this._setReference(m.gray, t);
+        this.state = 'learning';
+        this.refLines = null;
+        if (this.refLinesD) { this.refLinesD.delete(); this.refLinesD = null; }
+        this.tracks = [];
+        events.push({ type: 'relearn', t });
+        return this._result(t, events);
+      }
+      this._rereference(m.gray, t);
+      events.push({ type: 'reref', t });
+    }
+
     m.M23.data64F.set(this.T.slice(0, 6));
     const size = new cv.Size(W, H);
     cv.warpAffine(m.rgba, m.stab, m.M23, size, cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
@@ -377,6 +463,22 @@ export class StreamTracker {
     this.prevLab[0].set(Lf); this.prevLab[1].set(Af); this.prevLab[2].set(Bf);
 
     const lm = this._lineMap();
+
+    if (this._pendingRef) {
+      // new reference lines from this view, minus the streams being tracked
+      const ref = Float32Array.from(lm);
+      for (const [bx0, by0, bx1, by1] of this._pendingRef) {
+        for (let yy = Math.max(0, by0); yy < Math.min(H, by1); yy++) {
+          ref.fill(0, yy * W + Math.max(0, bx0), yy * W + Math.min(W, bx1));
+        }
+      }
+      const refMat = cv.matFromArray(H, W, cv.CV_32F, ref);
+      if (this.refLinesD) this.refLinesD.delete();
+      this.refLinesD = new cv.Mat();
+      cv.dilate(refMat, this.refLinesD, m.dilK);
+      refMat.delete();
+      this._pendingRef = null;
+    }
 
     if (this.state === 'learning') {
       if (!this.refLines) this.refLines = new Float32Array(n);
@@ -426,6 +528,10 @@ export class StreamTracker {
       for (const i of core) inside += change[i];
       inside /= core.length;
       let ringSum = 0, ringN = 0;
+      // per-row background colour from the ring (background changes down the
+      // stream: wall, cup interior, rim)
+      const rows = y1 - y0;
+      const rL = new Float32Array(rows), rA = new Float32Array(rows), rB = new Float32Array(rows), rN = new Float32Array(rows);
       for (let yy = y0; yy < y1; yy++) {
         for (let xx = x0; xx < x1; xx++) {
           const i = yy * W + xx;
@@ -439,14 +545,35 @@ export class StreamTracker {
               if (rx >= 0 && rx < W && labels[ry * W + rx] === k) { near = true; break; }
             }
           }
-          if (!near) { ringSum += change[i]; ringN++; }
+          if (!near) {
+            ringSum += change[i]; ringN++;
+            const r = yy - y0;
+            rL[r] += Lf[i]; rA[r] += Af[i]; rB[r] += Bf[i]; rN[r]++;
+          }
         }
       }
       const around = ringN ? ringSum / ringN : inside;
       const flow = inside / (around + 1);
+      // Colour: of the core pixels, keep the half that differs most from the
+      // local background (least mixed with it); skip the sample if the stream
+      // barely stands out (thin stream over a similar or sunlit background).
+      const scored = [];
+      for (const i of core) {
+        const r = ((i / W) | 0) - y0;
+        let n = 0, bl = 0, ba = 0, bb = 0;
+        for (let q = Math.max(0, r - 2); q <= Math.min(rows - 1, r + 2); q++) { n += rN[q]; bl += rL[q]; ba += rA[q]; bb += rB[q]; }
+        if (!n) continue;
+        const dE = Math.hypot(Lf[i] - bl / n, Af[i] - ba / n, Bf[i] - bb / n);
+        scored.push([dE, i]);
+      }
+      scored.sort((p, q) => q[0] - p[0]);
+      const keep = scored.slice(0, Math.max(3, scored.length >> 1));
+      const contrast = keep.length ? median(keep.map((k) => k[0])) : 0;
+      const pix = keep.length ? keep.map((k) => k[1]) : core;
       dets.push({
-        cx: x + w / 2, box: [x, y, w, h], core, flow,
-        L: median(core.map((i) => Lf[i])), a: median(core.map((i) => Af[i])), b: median(core.map((i) => Bf[i])),
+        cx: x + w / 2, box: [x, y, w, h], core, flow, contrast,
+        colorOk: contrast >= o.minContrast,
+        L: median(pix.map((i) => Lf[i])), a: median(pix.map((i) => Af[i])), b: median(pix.map((i) => Bf[i])),
       });
     }
 
@@ -457,11 +584,15 @@ export class StreamTracker {
       for (const tr of this.tracks) {
         if (Math.abs(tr.cx - d.cx) < 12 && tr.last < t && (!best || Math.abs(tr.cx - d.cx) < Math.abs(best.cx - d.cx))) best = tr;
       }
+      const cy = d.box[1] + d.box[3] / 2;
       if (!best) {
-        best = new Track(this.nextTrackId++, d.cx, t);
+        best = new Track(this.nextTrackId++, d.cx, cy, t);
+        best.box = d.box;
         this.tracks.push(best);
       } else {
         best.cx = best.cx * 0.8 + d.cx * 0.2;
+        best.cy = best.cy * 0.8 + cy * 0.2;
+        best.box = d.box;
         best.hits++;
         best.last = t;
         best.recent.push(t);
@@ -473,7 +604,7 @@ export class StreamTracker {
         let s = null;
         for (const st of this.streams) if (Math.abs(st.cx - best.cx) < 20 && (!s || Math.abs(st.cx - best.cx) < Math.abs(s.cx - best.cx))) s = st;
         if (!s) {
-          s = { id: this.streams.length + 1, cx: best.cx, flows: [], samples: [], baseline: null, smoothP: null };
+          s = { id: this.streams.length + 1, cx: best.cx, cy: best.cy, flows: [], samples: [], baseline: null, smoothP: null, established: false };
           this.streams.push(s);
         }
         best.stream = s;
@@ -508,14 +639,19 @@ export class StreamTracker {
     const live = [];
     for (const d of dets) {
       const s = d.track.stream;
-      if (!s || s.flows.length < Math.max(5, fps / 2) || median(s.flows) < o.flowMin || !d.track.flowing(o.flowMin, fps)) continue;
+      // Flow establishes a stream; after that it stays live while it keeps
+      // being seen in place (hysteresis). Late in a shot streams thin out and
+      // run smooth, and moving light around them lowers the flow score, so
+      // re-checking flow every frame would drop real streams.
+      if (s && !s.established && s.flows.length >= Math.max(5, fps) && median(s.flows) >= o.flowMin) s.established = true;
+      if (!s || !s.established || !d.track.flowing(o.flowKeep, fps)) continue;
       const C = Math.hypot(d.a, d.b);
       d.stream = s;
       d.P = d.L - C;
       d.C = C;
       d.rgb = labToRgb(d.L, d.a, d.b);
       live.push(d);
-      if (this.state === 'pouring' || this.state === 'armed') {
+      if (d.colorOk && (this.state === 'pouring' || this.state === 'armed')) {
         s.samples.push({ t, L: d.L, a: d.a, b: d.b, C, P: d.P, rgb: d.rgb });
         if (s.samples.length > 3000) s.samples.shift();
       }
@@ -539,7 +675,11 @@ export class StreamTracker {
   _blonde(t, events) {
     const o = this.opts;
     let bestProg = 0, bestStream = null;
+    // only the main streams: established, with a good share of the samples
+    // (keeps short-lived artefacts such as chrome highlights out of the alert)
+    const most = Math.max(0, ...this.streams.map((s) => s.samples.length));
     for (const s of this.streams) {
+      if (!s.established || s.samples.length < 0.25 * most) { s.progress = 0; continue; }
       const recent = [];
       for (let i = s.samples.length - 1; i >= 0 && t - s.samples[i].t <= o.smoothS; i--) recent.push(s.samples[i].P);
       if (recent.length < Math.max(3, this.fps * o.smoothS * 0.25)) { s.progress = 0; continue; }

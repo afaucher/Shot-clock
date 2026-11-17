@@ -62,7 +62,7 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--lead', type=float, default=1.5, help='seconds of empty frames first')
     ap.add_argument('--fps', type=int, default=30)
-    ap.add_argument('--tail', type=float, default=2.5)
+    ap.add_argument('--tail', type=float, default=4.0, help='seconds of empty frames after the stream stops')
     args = ap.parse_args()
 
     rng = np.random.default_rng(1)
