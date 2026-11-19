@@ -34,7 +34,7 @@ python3 serve.py --https      # https://<LAN-IP>:8443 for a phone on the same Wi
 1. Press **Camera** (or **Video file** to replay a recording).
 2. Frame the spouts and the cup, with the streams' path in view.
 3. Press **Arm** *before* starting the pump, and hold roughly still for about a second while it learns the scene ("Learning scene…" → "Ready").
-4. Pull the shot. The clock starts at the first liquid, counts down to your target, and alerts on blonding.
+4. Pull the shot. The clock starts at the first liquid. When the streams stop (or you press **Stop**), the shot report appears.
 5. **Re-arm** before the next shot. **Stop** ends a shot by hand (useful if drips keep it going).
 
 Settings: target time, blonde sensitivity (experimental), sound, spoken alerts, and whether to draw the detected streams. The *Vision* line under Settings shows processing speed on your device.
