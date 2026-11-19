@@ -140,7 +140,15 @@ The owner's shared album now holds every clip in order (item N = clip N; item 4 
 
 Clip 7 also showed the tracker re-learning the scene repeatedly while the camera was re-framed. That is the intended behaviour, and the app now tells the user ("Camera moved, re-learning the scene, hold steady").
 
-This is the first evidence that the settings are not just fitted to the first four clips. It is still seven clips.
+This is the first evidence that the settings are not just fitted to the first four clips.
+
+**Checking for duplicates.** Every album item was compared with every earlier clip using frame fingerprints (2 frames/s, normalised grayscale) at any time offset. Items 1–4 are clips 1–4 (correlation 1.00). Items 5–8 match nothing earlier (best 0.58, a similar scene), so they are new recordings.
+
+**Clip 8, a known hard case.** The recording starts only about 2 s before the first drop (1.8 s), and the camera moves right then. The scene gets re-learned while the first drops are falling, so the clock starts about 6 s late, although the streams are then tracked well (92% / 86%, only the two real ones shown). Two fixes were tried and reverted after the evaluation showed they hurt:
+- leaving pixels that kept changing out of the learned scene: it also removed the flickering static edges (chrome, reflections) the reference exists to suppress, and caused early false starts on every clip;
+- re-learning only when nothing at all is tracked: false starts on clips 1 and 7.
+
+In practice this is the "press Arm, then hold steady for a second before starting the pump" instruction; the app now says when it re-learns.
 
 ## Known gaps
 

@@ -30,10 +30,10 @@ const settings = Object.assign({
   blondeDelta: TRACKER_DEFAULTS.blondeDelta,
   targetAt: 25,
   maxStreams: 2,
-  sound: true,
-  speech: true,
+  sound: false,       // alerts (sounds, vibration, flash): off by default, the app reports
+  speech: false,
   showMask: true,
-}, load('shotclock.settings.v2', {}));
+}, load('shotclock.settings.v3', {}));
 
 let cv = null;
 let tracker = null;
@@ -91,7 +91,7 @@ function bindSettings() {
     tracker?.setOptions({ blondeDelta: settings.blondeDelta, maxStreams: settings.maxStreams });
     sounds.enabled = settings.sound;
     sounds.speech = settings.speech;
-    save('shotclock.settings.v2', settings);
+    save('shotclock.settings.v3', settings);
   };
   for (const k of ['optDelta', 'optTarget', 'optStreams', 'optSound', 'optSpeech', 'optMask']) {
     el[k].addEventListener('input', sync);
@@ -321,6 +321,7 @@ function handleEvent(ev) {
 }
 
 function flash(ms) {
+  if (!settings.sound) return;        // part of the alerts
   document.body.classList.add('alerting');
   clearTimeout(alertTimer);
   alertTimer = setTimeout(clearAlert, ms);
@@ -532,7 +533,14 @@ el.btnCamera.addEventListener('click', startCamera);
 el.fileInput.addEventListener('change', () => { if (el.fileInput.files[0]) openFile(el.fileInput.files[0]); });
 el.btnArm.addEventListener('click', arm);
 el.btnStop.addEventListener('click', stopShot);
-el.btnTest.addEventListener('click', () => { unlockAudio(); sounds.blonde(); });
+el.btnTest.addEventListener('click', () => {
+  // play even with alerts off, so you can hear what they would sound like
+  unlockAudio();
+  const was = sounds.enabled;
+  sounds.enabled = true;
+  sounds.blonde();
+  sounds.enabled = was;
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && source === 'camera' && !wakeLock) requestWakeLock();
 });

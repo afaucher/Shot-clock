@@ -29,8 +29,8 @@ function tone(freq, start, dur, { type = 'square', gain = 0.35 } = {}) {
 }
 
 export const sounds = {
-  enabled: true,
-  speech: true,
+  enabled: false,     // alerts are off by default
+  speech: false,
   log: [],      // for tests / debugging
 
   start() {
@@ -50,8 +50,9 @@ export const sounds = {
 
   blonde(early = false) {
     this.log.push(early ? 'blonde-early' : 'blonde');
+    if (!this.enabled) return;
     if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 400]);
-    if (!this.enabled || !unlockAudio()) return;
+    if (!unlockAudio()) return;
     const t = ctx.currentTime;
     for (let i = 0; i < 3; i++) tone(1046, t + i * 0.22, 0.15, { gain: 0.45 });
     if (this.speech && 'speechSynthesis' in window) {
@@ -75,8 +76,9 @@ export const sounds = {
   // target shot time reached
   target(seconds) {
     this.log.push('target');
+    if (!this.enabled) return;
     if (navigator.vibrate) navigator.vibrate(500);
-    if (!this.enabled || !unlockAudio()) return;
+    if (!unlockAudio()) return;
     tone(1175, ctx.currentTime, 0.6, { type: 'sine', gain: 0.45 });
     if (this.speech && 'speechSynthesis' in window) {
       setTimeout(() => {

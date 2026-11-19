@@ -71,7 +71,10 @@ async function runCase(name, { launchArgs = [], setup }) {
       history: document.querySelectorAll('#history li .ribbon').length,
     }));
     const ev = Object.fromEntries(out.events.map((e) => [e.type, e]));
+    // alerts are off by default (the app reports; it doesn't interrupt)
+    const alertsOn = await page.evaluate(() => document.getElementById('optSound').checked || window.shotClock.sounds.enabled);
     const problems = [];
+    if (alertsOn) problems.push('alerts should be off by default');
     const early = ev.blonde.elapsed < TARGET;
     const reached = TARGET < ev.end.elapsed;
     if (!out.sounds.includes(early ? 'blonde-early' : 'blonde')) problems.push(`expected ${early ? 'early ' : ''}blonde alert`);

@@ -109,6 +109,21 @@
       "firstLiquidCheck": "coffee flowing in the first frame; the correct result is no shot start",
       "pump": null,
       "recordedPastPumpOff": false
+    },
+    {
+      "id": "clip8",
+      "setup": "hand-held, wide faceted cup (crema visible), stainless; camera moves at the first drops and zooms out at ~8 s",
+      "video": {
+        "seconds": 28.7,
+        "size": "1080x1920"
+      },
+      "armAt": 0.0,
+      "spouts": 2,
+      "firstLiquid": 1.8,
+      "firstLiquidCheck": "frames: nothing at 1.4 s, first drop at 1.8 s; recording starts only ~2 s before the first drop",
+      "pump": null,
+      "recordedPastPumpOff": false,
+      "notes": "hard case: the scene can only be learned for ~1 s before the first drops, while the camera moves"
     }
   ]
 }
