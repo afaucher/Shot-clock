@@ -264,7 +264,11 @@ function frame(t) {
 
   const elapsed = tracker.elapsed(t);
   const target = settings.targetAt;
-  if (target > 0 && tracker.state === 'pouring' && !targetFired) {
+  // only while coffee is still flowing: the end is confirmed 3 s after the
+  // last stream and backdated, so a target in that gap belongs to a shot
+  // that has already finished
+  const flowingNow = tracker.lastFlowT != null && t - tracker.lastFlowT < 1.0;
+  if (target > 0 && tracker.state === 'pouring' && !targetFired && flowingNow) {
     const left = target - elapsed;
     const sec = Math.ceil(left);
     if (left > 0 && sec <= 3 && sec !== lastPip) {
@@ -554,6 +558,13 @@ function showReport(idx) {
     const li = document.createElement('li');
     li.className = n.kind;
     li.textContent = n.text;
+    if (n.ref && document.getElementById(n.ref)) {
+      const a = document.createElement('a');
+      a.href = '#' + n.ref;
+      a.textContent = 'see reference photo';
+      a.addEventListener('click', (e) => { e.preventDefault(); showRef(n.ref); });
+      li.appendChild(a);
+    }
     rep.notes.appendChild(li);
   }
   if (r.caveat) {
@@ -568,6 +579,13 @@ function showReport(idx) {
   rep.grind.value = mine.grind ?? '';
   rep.taste.value = mine.taste ?? '';
   rep.text.value = mine.text ?? '';
+}
+
+function showRef(id) {
+  const refs = $('repRefs');
+  refs.open = true;
+  for (const f of refs.querySelectorAll('figure')) f.classList.toggle('highlight', f.id === id);
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function drawRibbon(c, s, tMax, target) {

@@ -6,7 +6,8 @@ A camera espresso **shot quality report** that runs in the browser. Point a phon
 2. **How each spout's stream developed**: how long it stayed dark, when it turned caramel, how much of its lightening happened in the first 6 s, and how steadily it got paler. Shown as a colour ribbon per spout.
 3. **Left vs. right balance**: whether the two spouts developed alike, which can point to uneven extraction.
 4. **Plain-language notes**, e.g. "went light early, then stayed flat, which often means fast flow". The thresholds are provisional, based on 8 real clips.
-5. **Your own notes** per shot (dose, yield, grind, taste), saved with the report in a local history you can tap back through.
+5. **Reference photos** of what shots usually look like (a good double-spout shot over time, mouse tails, fast shot, uneven spouts, bottomless), openly licensed, linked from the matching notes.
+6. **Your own notes** per shot (dose, yield, grind, taste), saved with the report in a local history you can tap back through.
 
 Live during the shot it finds and follows the streams on its own (hand-held is fine, two spouts by default), shows the running time and the stream colours. **Alerts** (countdown pips, target tone, blonde alert, voice, vibration) are available but **off by default**.
 

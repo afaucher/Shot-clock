@@ -130,13 +130,13 @@ export function buildReport(tracker, { target = 25, maxStreams = 2, rules = REPO
     const flat = profs.filter((p) => p.paleSlope != null && p.paleSlope < rules.flatSlope);
     const steady = profs.filter((p) => p.paleSlope != null && p.paleSlope >= rules.steadySlope);
     if (early.length && early.some((p) => flat.includes(p))) {
-      notes.push({ kind: 'warn', text: 'Went light early, then stayed flat. That often means fast flow: a coarser grind, a lighter dose or a light tamp.' });
+      notes.push({ kind: 'warn', ref: 'ref-fast', text: 'Went light early, then stayed flat. That often means fast flow: a coarser grind, a lighter dose or a light tamp.' });
     } else if (early.length) {
       notes.push({ kind: 'info', text: 'Most of the lightening happened in the first few seconds.' });
     }
     const seenFromStart = profs.some((p) => p.earlyShare != null);
     if (!early.length && steady.length && seenFromStart) {
-      notes.push({ kind: 'good', text: 'Stayed dark at first, then got paler steadily through the shot.' });
+      notes.push({ kind: 'good', ref: 'ref-early', text: 'Stayed dark at first, then got paler steadily through the shot.' });
     }
   }
   let balance = null;
@@ -150,16 +150,16 @@ export function buildReport(tracker, { target = 25, maxStreams = 2, rules = REPO
     // sampling or backdrop effect
     const uneven = caramelGap != null && caramelGap > rules.unevenCaramelS && riseGap != null && riseGap > rules.unevenRise;
     balance.verdict = uneven ? 'uneven' : 'even';
-    if (uneven) notes.push({ kind: 'warn', text: 'The two spouts developed differently, which can point to uneven extraction (channeling). First check the machine is level, then try WDT and a level tamp.' });
+    if (uneven) notes.push({ kind: 'warn', ref: 'ref-uneven', text: 'The two spouts developed differently, which can point to uneven extraction (channeling). First check the machine is level, then try WDT and a level tamp.' });
     else if (startGap > rules.startGapS && streams.every((s) => s.firstSeen <= rules.seenFromStartS + rules.startGapS)) {
-      notes.push({ kind: 'warn', text: `One spout started ${startGap.toFixed(1)} s before the other. That can come from uneven puck prep or a machine that isn't level; check the level first, then distribution and tamp.` });
+      notes.push({ kind: 'warn', ref: 'ref-uneven', text: `One spout started ${startGap.toFixed(1)} s before the other. That can come from uneven puck prep or a machine that isn't level; check the level first, then distribution and tamp.` });
     }
   }
   // "Abrupt lightening" is a recognised channeling sign, but with the current
   // colour sampling the 3 s jump (paleJump) fired on the steadiest real shot
   // too, so it is kept as a measurement only, not turned into a note.
   if (ended && duration < rules.fastS) {
-    notes.push({ kind: 'warn', text: `This shot ran fast (${duration.toFixed(0)} s from the first drop), which often means the grind is too coarse or the dose is low.` });
+    notes.push({ kind: 'warn', ref: 'ref-fast', text: `This shot ran fast (${duration.toFixed(0)} s from the first drop), which often means the grind is too coarse or the dose is low.` });
   } else if (ended && duration > rules.slowS) {
     notes.push({ kind: 'warn', text: `This shot ran long (${duration.toFixed(0)} s), which often points to a grind that's too fine or a high dose.` });
   }
