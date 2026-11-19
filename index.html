@@ -42,6 +42,26 @@
       <div class="legend small"><span>colour of each stream over the shot (0 = first liquid)</span><span>lines = paleness per stream · green = target</span></div>
     </section>
 
+    <section class="report" id="report" hidden>
+      <div class="report-head"><h2>Shot report</h2><span class="small" id="repWhen"></span></div>
+      <div class="rep-time"><span class="rep-dur" id="repDur"></span><span class="pill" id="repTiming"></span></div>
+      <div id="repStreams"></div>
+      <p class="small" id="repBalance"></p>
+      <ul class="rep-notes" id="repNotes"></ul>
+      <details class="rep-mine">
+        <summary>Your notes for this shot</summary>
+        <div class="grid">
+          <label>Dose (g)<input type="number" id="noteDose" step="0.1" min="0" inputmode="decimal"></label>
+          <label>Yield (g)<input type="number" id="noteYield" step="0.1" min="0" inputmode="decimal"></label>
+          <label>Grind<input type="text" id="noteGrind" maxlength="40"></label>
+          <label>Taste
+            <select id="noteTaste"><option value="">–</option><option>sour</option><option>balanced</option><option>bitter</option><option>weak</option><option>strong</option></select>
+          </label>
+          <label class="wide">Notes<input type="text" id="noteText" maxlength="200"></label>
+        </div>
+      </details>
+    </section>
+
     <details class="settings" open>
       <summary>Settings</summary>
       <div class="grid">
@@ -71,7 +91,7 @@
     </details>
 
     <section class="history">
-      <h2>Recent shots</h2>
+      <h2>Recent shots <span class="small">(tap one for its report)</span></h2>
       <ol id="history"></ol>
     </section>
   </main>

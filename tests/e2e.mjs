@@ -75,6 +75,11 @@ async function runCase(name, { launchArgs = [], setup }) {
     const alertsOn = await page.evaluate(() => document.getElementById('optSound').checked || window.shotClock.sounds.enabled);
     const problems = [];
     if (alertsOn) problems.push('alerts should be off by default');
+    // the quality report appears after the shot
+    const rep = await page.evaluate(() => ({ shown: !document.getElementById('report').hidden,
+      dur: document.getElementById('repDur').textContent, streams: document.querySelectorAll('#repStreams .rep-stream').length }));
+    if (!rep.shown) problems.push('report not shown after the shot');
+    else if (Math.abs(parseFloat(rep.dur) - ev.end.elapsed) > 0.2 || rep.streams < 1) problems.push(`report content off: ${JSON.stringify(rep)}`);
     const early = ev.blonde.elapsed < TARGET;
     const reached = TARGET < ev.end.elapsed;
     if (!out.sounds.includes(early ? 'blonde-early' : 'blonde')) problems.push(`expected ${early ? 'early ' : ''}blonde alert`);

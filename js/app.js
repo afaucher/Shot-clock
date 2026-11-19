@@ -1,5 +1,6 @@
 import { StreamTracker, TRACKER_DEFAULTS } from './tracker.js';
 import { sounds, unlockAudio } from './audio.js';
+import { buildReport } from './report.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -485,7 +486,10 @@ function drawChart() {
 }
 
 // --------------------------------------------------------------- history
+let reportIdx = null;       // which history entry the report panel shows
+
 function saveShot() {
+  const report = buildReport(tracker, { target: settings.targetAt, maxStreams: settings.maxStreams });
   const main = tracker.streams.slice().sort((a, b) => b.samples.length - a.samples.length)[0];
   const s = (main?.samples || []).filter((p) => p.t >= tracker.shotStart);
   const N = 48;
@@ -493,10 +497,108 @@ function saveShot() {
   for (let i = 0; i < N && s.length; i++) ribbon.push(s[Math.floor(i * s.length / N)].rgb);
   const hist = load('shotclock.history', []);
   hist.unshift({ when: Date.now(), total: tracker.elapsed(0), blondeAt: tracker.blondeAt,
-    target: settings.targetAt || null, streams: tracker.streams.filter((x) => x.samples.length > 30).length, ribbon });
+    target: settings.targetAt || null, streams: tracker.streams.filter((x) => x.samples.length > 30).length, ribbon,
+    report, mine: {} });
   save('shotclock.history', hist.slice(0, 20));
-  renderHistory();
+  showReport(0);
 }
+
+// ------------------------------------------------------------- report
+const rep = {
+  panel: $('report'), when: $('repWhen'), dur: $('repDur'), timing: $('repTiming'), streams: $('repStreams'),
+  balance: $('repBalance'), notes: $('repNotes'),
+  dose: $('noteDose'), yld: $('noteYield'), grind: $('noteGrind'), taste: $('noteTaste'), text: $('noteText'),
+};
+
+function showReport(idx) {
+  const hist = load('shotclock.history', []);
+  const h = hist[idx];
+  reportIdx = idx;
+  renderHistory();
+  if (!h?.report) { rep.panel.hidden = true; return; }
+  const r = h.report;
+  rep.panel.hidden = false;
+  rep.when.textContent = new Date(r.when).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  rep.dur.textContent = `${r.duration.toFixed(1)} s${r.endedBy === 'stopped' ? '+' : ''}`;
+  rep.timing.textContent = r.timing ? `${r.timing}${r.target ? ` (target ${r.target} s)` : ''}` : (r.endedBy === 'stopped' ? 'stopped early' : '');
+  rep.timing.className = 'pill' + (r.timing === 'on target' ? ' on' : r.timing ? ' off' : '');
+  rep.timing.hidden = !rep.timing.textContent;
+
+  rep.streams.innerHTML = '';
+  const tMax = Math.max(r.duration + 1, (r.target || 0) + 2, 20);
+  for (const s of r.streams) {
+    const div = document.createElement('div');
+    div.className = 'rep-stream';
+    const c = document.createElement('canvas');
+    div.appendChild(c);
+    const p = s.profile || {};
+    const bits = [];
+    if (p.caramelAt != null) bits.push(`turned caramel at ${p.caramelAt.toFixed(0)} s`);
+    else if (s.firstSeen > 2) bits.push(`seen from ${s.firstSeen.toFixed(0)} s`);
+    if (p.earlyShare != null) bits.push(`${Math.round(p.earlyShare * 100)}% of its lightening by 6 s`);
+    if (p.paleRise != null) bits.push(`paler by ${p.paleRise.toFixed(0)} through the shot`);
+    const txt = document.createElement('p');
+    txt.className = 'small';
+    txt.innerHTML = `<b>${s.label}</b> · ${bits.join(' · ') || 'not enough data'}`;
+    div.appendChild(txt);
+    rep.streams.appendChild(div);
+    requestAnimationFrame(() => drawRibbon(c, s, tMax, r.target));
+  }
+  const b = r.balance;
+  rep.balance.textContent = b
+    ? `Spouts: ${b.verdict}${b.caramelGap != null ? ` · turned caramel ${b.caramelGap.toFixed(0)} s apart` : ''}${b.riseGap != null ? ` · paleness change differs by ${b.riseGap.toFixed(0)}` : ''}`
+      + (r.blondeAt != null ? ` · turned pale at ${r.blondeAt.toFixed(1)} s (experimental)` : '')
+    : (r.blondeAt != null ? `Turned pale at ${r.blondeAt.toFixed(1)} s (experimental)` : '');
+  rep.notes.innerHTML = '';
+  for (const n of r.notes) {
+    const li = document.createElement('li');
+    li.className = n.kind;
+    li.textContent = n.text;
+    rep.notes.appendChild(li);
+  }
+  const mine = h.mine || {};
+  rep.dose.value = mine.dose ?? '';
+  rep.yld.value = mine.yield ?? '';
+  rep.grind.value = mine.grind ?? '';
+  rep.taste.value = mine.taste ?? '';
+  rep.text.value = mine.text ?? '';
+}
+
+function drawRibbon(c, s, tMax, target) {
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(c.clientWidth * dpr);
+  c.height = Math.round(34 * dpr);
+  const g = c.getContext('2d');
+  const X = (t) => (t / tMax) * c.width;
+  for (const bin of s.series) {
+    if (!bin) continue;
+    g.fillStyle = `rgb(${bin.rgb.join(',')})`;
+    g.fillRect(X(bin.t - 0.5), 0, Math.ceil(X(1)) + 1, c.height);
+  }
+  g.lineWidth = 2 * dpr;
+  if (s.profile?.caramelAt != null) {
+    g.strokeStyle = '#f3e9df';
+    g.beginPath(); g.moveTo(X(s.profile.caramelAt), 0); g.lineTo(X(s.profile.caramelAt), c.height); g.stroke();
+  }
+  if (target) {
+    g.strokeStyle = '#7bd389';
+    g.setLineDash([4 * dpr, 3 * dpr]);
+    g.beginPath(); g.moveTo(X(target), 0); g.lineTo(X(target), c.height); g.stroke();
+    g.setLineDash([]);
+  }
+}
+
+function saveMine() {
+  if (reportIdx == null) return;
+  const hist = load('shotclock.history', []);
+  if (!hist[reportIdx]) return;
+  hist[reportIdx].mine = {
+    dose: rep.dose.value || undefined, yield: rep.yld.value || undefined, grind: rep.grind.value || undefined,
+    taste: rep.taste.value || undefined, text: rep.text.value || undefined,
+  };
+  save('shotclock.history', hist);
+}
+for (const k of ['dose', 'yld', 'grind', 'taste', 'text']) rep[k].addEventListener('change', saveMine);
 
 function renderHistory() {
   const hist = load('shotclock.history', []);
@@ -505,18 +607,21 @@ function renderHistory() {
     el.history.innerHTML = '<li class="empty">No shots yet.</li>';
     return;
   }
-  for (const h of hist.slice(0, 10)) {
+  hist.slice(0, 10).forEach((h, idx) => {
     const li = document.createElement('li');
+    if (idx === reportIdx) li.classList.add('selected');
+    li.addEventListener('click', () => showReport(idx));
     const when = new Date(h.when).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const early = h.blondeAt != null && h.target && h.blondeAt < h.target;
-    const blonde = h.blondeAt != null ? ` · blonde @ ${h.blondeAt.toFixed(1)} s${early ? ' <em class="early">early</em>' : ''}` : '';
-    li.innerHTML = `<b>${h.total.toFixed(1)} s</b><span>${when}${h.target ? ` · target ${h.target} s` : ''}${blonde}</span>`;
+    const warn = h.report?.notes?.find((n) => n.kind === 'warn');
+    const timing = h.report?.timing ? ` · ${h.report.timing}` : '';
+    const flag = warn ? ' <em class="early">check report</em>' : '';
+    li.innerHTML = `<b>${h.total.toFixed(1)} s</b><span>${when}${timing}${flag}</span>`;
     const rib = document.createElement('div');
     rib.className = 'ribbon';
     if (h.ribbon?.length) rib.style.background = `linear-gradient(90deg, ${h.ribbon.map((c) => `rgb(${c.join(',')})`).join(',')})`;
     li.appendChild(rib);
     el.history.appendChild(li);
-  }
+  });
 }
 
 function setStatus(text) { el.status.textContent = text; }
@@ -548,7 +653,7 @@ document.addEventListener('visibilitychange', () => {
 bindSettings();
 renderHistory();
 
-window.shotClock = { sounds, settings, eventLog, get tracker() { return tracker; }, get result() { return lastResult; } };
+window.shotClock = { sounds, settings, eventLog, showReport, get tracker() { return tracker; }, get result() { return lastResult; } };
 
 loadOpenCv().then((m) => {
   cv = m;

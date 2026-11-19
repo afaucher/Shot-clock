@@ -1,13 +1,14 @@
 # Shot Clock
 
-A camera espresso shot timer that runs in the browser. Point a phone at the spouts and cup, and it:
+A camera espresso **shot quality report** that runs in the browser. Point a phone at the spouts and cup, press Arm, pull the shot, and you get:
 
-1. **Finds and follows the streams on its own.** There's no box to draw, hand-held is fine, and it handles two spouts.
-2. **Starts the clock at the first liquid** (not when the pump turns on). A grey provisional time shows as soon as coffee is spotted. Once a stream has been present for 2 s, the time turns white with a beep, backdated to the first drop.
-3. **Counts down to your target time** (default 25 s from first liquid) with 3-2-1 pips and a tone on the target.
-4. **Tracks each stream's colour** and plots it live.
-5. **Flags blonding**, and marks it **early** if it happens before your target. That usually means fast flow or channeling (light tamp, coarse grind). *This alert is experimental and not yet calibrated.*
-6. Ends the shot when the streams stop (or when you press **Stop**) and keeps a local history.
+1. **The shot time from the first drop** (not the pump), detected on its own, and how it compares with your target.
+2. **How each spout's stream developed**: how long it stayed dark, when it turned caramel, how much of its lightening happened in the first 6 s, and how steadily it got paler. Shown as a colour ribbon per spout.
+3. **Left vs. right balance**: whether the two spouts developed alike, which can point to uneven extraction.
+4. **Plain-language notes**, e.g. "went light early, then stayed flat, which often means fast flow". The thresholds are provisional, based on 8 real clips.
+5. **Your own notes** per shot (dose, yield, grind, taste), saved with the report in a local history you can tap back through.
+
+Live during the shot it finds and follows the streams on its own (hand-held is fine, two spouts by default), shows the running time and the stream colours. **Alerts** (countdown pips, target tone, blonde alert, voice, vibration) are available but **off by default**.
 
 Everything runs on the device with [OpenCV.js](https://docs.opencv.org/4.x/d5/d10/tutorial_js_root.html) (WebAssembly). Nothing is uploaded and there is no server, so it can be published as a static site on GitHub Pages.
 

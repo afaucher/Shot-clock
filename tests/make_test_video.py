@@ -50,7 +50,19 @@ def background(rng):
     x = np.linspace(0, 1, W)[None, :]
     base = 70 + 30 * y - 15 * np.abs(x - 0.5)  # dim machine body / drip tray
     img = np.stack([base * 0.95, base, base * 1.08], axis=-1)
-    img += rng.normal(0, 6, (H, W, 1))          # texture
+    img += rng.normal(0, 6, (H, W, 1))          # fine texture
+    # coarse static structure (tiles, fittings) so registration has something
+    # to lock onto, as in a real kitchen; kept away from the stream's column
+    for gx in range(20, W, 70):
+        if abs(gx - CX) > 40:
+            img[:, gx:gx + 3] -= 25
+    for gy in range(30, H, 60):
+        img[gy:gy + 3, :] -= 25
+    for _ in range(14):
+        bx, by = int(rng.integers(0, W - 40)), int(rng.integers(0, H - 30))
+        if abs(bx + 20 - CX) < 60:
+            continue
+        img[by:by + int(rng.integers(10, 30)), bx:bx + int(rng.integers(10, 40))] += rng.normal(0, 30)
     img[:SPOUT_Y, CX - 70:CX + 70] = (40, 40, 44)   # portafilter
     img[SPOUT_Y - 10:SPOUT_Y, CX - 8:CX + 8] = (90, 90, 95)  # spout
     img[CUP_Y:, CX - 90:CX + 90] = (225, 225, 220)  # cup
