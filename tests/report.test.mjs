@@ -58,3 +58,18 @@ test('a stream first seen mid-shot gets no timing measures', () => {
   assert.equal(r.streams[0].profile.caramelAt, null);
   assert.equal(r.streams[0].profile.earlyShare, null);
 });
+
+test('fast and slow shots are called out; every report carries the scale/roast caveat', () => {
+  const steady = { L: (t) => (t < 3 ? 18 : 18 + 1.6 * (t - 3)), P: (t) => (t < 3 ? -10 : -10 + 1.2 * (t - 3)) };
+  const fast = buildReport(fakeTracker({ duration: 16, streams: [steady] }), { target: 25 });
+  assert.ok(fast.notes.some((n) => /ran fast/.test(n.text)));
+  const slow = buildReport(fakeTracker({ duration: 40, streams: [steady] }), { target: 25 });
+  assert.ok(slow.notes.some((n) => /ran long/.test(n.text)));
+  assert.match(fast.caveat, /scale/);
+});
+
+test('spouts starting out of step are flagged even when they then develop alike', () => {
+  const steady = { L: (t) => (t < 3 ? 18 : 18 + 1.6 * (t - 3)), P: (t) => (t < 3 ? -10 : -10 + 1.2 * (t - 3)) };
+  const r = buildReport(fakeTracker({ streams: [steady, { ...steady, from: 2.5 }] }), { target: 25 });
+  assert.ok(r.notes.some((n) => /started 2\.5 s before/.test(n.text)), JSON.stringify(r.notes));
+});

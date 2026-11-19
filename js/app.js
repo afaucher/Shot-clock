@@ -556,6 +556,12 @@ function showReport(idx) {
     li.textContent = n.text;
     rep.notes.appendChild(li);
   }
+  if (r.caveat) {
+    const li = document.createElement('li');
+    li.className = 'caveat';
+    li.textContent = r.caveat;
+    rep.notes.appendChild(li);
+  }
   const mine = h.mine || {};
   rep.dose.value = mine.dose ?? '';
   rep.yld.value = mine.yield ?? '';

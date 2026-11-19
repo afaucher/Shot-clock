@@ -75,3 +75,4 @@ summary { cursor: pointer; font-weight: 600; }
 .rep-mine input[type=text] { background: #120d0a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
 .history li { cursor: pointer; }
 .history li.selected { outline: 1px solid var(--accent); border-radius: 6px; }
+.rep-notes li.caveat { border: none; color: var(--muted); font-size: .85rem; padding: 4px 2px; }

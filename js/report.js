@@ -14,6 +14,10 @@ export const REPORT_RULES = {
   unevenCaramelS: 3,     // spouts turning caramel this far apart...
   unevenRise: 12,        // ...AND their paleness changing this differently = uneven
   seenFromStartS: 2,     // timing measures only for streams seen this early
+  fastS: 20,             // shot (first drop to end) shorter than this = fast
+  slowS: 35,             // ...longer than this = slow
+  startGapS: 1.5,        // spouts' first drops this far apart = out of step
+  abruptJump: 15,        // (not used for notes yet: see buildReport)
 };
 
 function median(a) {
@@ -81,10 +85,17 @@ export function streamProfile(series, rules = REPORT_RULES, firstSeen = 0) {
   const Pafter = after.map((i) => P[i]);
   // robust change in paleness: last 3 s vs first 3 s after turning caramel
   const paleRise = Pafter.length >= 6 ? median(Pafter.slice(-3)) - median(Pafter.slice(0, 3)) : null;
+  // biggest paleness rise within any 3 s after turning caramel (abrupt vs gradual)
+  let jump = null;
+  for (let k = 0; k + 3 < Pafter.length; k++) {
+    const d = Pafter[k + 3] - Pafter[k];
+    if (Number.isFinite(d) && (jump == null || d > jump)) jump = d;
+  }
   return {
     Lstart: +Lstart.toFixed(1), Lend: +Lend.toFixed(1),
     caramelAt, earlyShare: earlyShare == null ? null : +earlyShare.toFixed(2),
     paleSlope: Number.isFinite(paleSlope) ? +paleSlope.toFixed(1) : null,
+    paleJump: jump == null ? null : +jump.toFixed(1),
     paleRise: paleRise == null ? null : +paleRise.toFixed(1),
 
   };
@@ -139,7 +150,18 @@ export function buildReport(tracker, { target = 25, maxStreams = 2, rules = REPO
     // sampling or backdrop effect
     const uneven = caramelGap != null && caramelGap > rules.unevenCaramelS && riseGap != null && riseGap > rules.unevenRise;
     balance.verdict = uneven ? 'uneven' : 'even';
-    if (uneven) notes.push({ kind: 'warn', text: 'The two spouts developed differently, which can point to uneven extraction (channeling). Check distribution and tamp.' });
+    if (uneven) notes.push({ kind: 'warn', text: 'The two spouts developed differently, which can point to uneven extraction (channeling). First check the machine is level, then try WDT and a level tamp.' });
+    else if (startGap > rules.startGapS && streams.every((s) => s.firstSeen <= rules.seenFromStartS + rules.startGapS)) {
+      notes.push({ kind: 'warn', text: `One spout started ${startGap.toFixed(1)} s before the other. That can come from uneven puck prep or a machine that isn't level; check the level first, then distribution and tamp.` });
+    }
+  }
+  // "Abrupt lightening" is a recognised channeling sign, but with the current
+  // colour sampling the 3 s jump (paleJump) fired on the steadiest real shot
+  // too, so it is kept as a measurement only, not turned into a note.
+  if (ended && duration < rules.fastS) {
+    notes.push({ kind: 'warn', text: `This shot ran fast (${duration.toFixed(0)} s from the first drop), which often means the grind is too coarse or the dose is low.` });
+  } else if (ended && duration > rules.slowS) {
+    notes.push({ kind: 'warn', text: `This shot ran long (${duration.toFixed(0)} s), which often points to a grind that's too fine or a high dose.` });
   }
   if (!ended) {
     notes.push({ kind: 'info', text: 'Measurement stopped before the shot ended, so the total time is a minimum.' });
@@ -147,8 +169,9 @@ export function buildReport(tracker, { target = 25, maxStreams = 2, rules = REPO
   if (timing && timing !== 'on target') {
     notes.push({ kind: 'info', text: diff < 0 ? 'Ran short of the target: try a finer grind or a larger dose.' : 'Ran past the target: try a coarser grind or a smaller dose.' });
   }
+  const caveat = 'Without a scale, yield and ratio weren\'t checked, and colour timing varies with roast and freshness (light roasts look paler and turn pale sooner), so taste is the final judge.';
   return {
-    when, duration: +duration.toFixed(1), target, timing, blondeAt: tracker.blondeAt,
+    when, duration: +duration.toFixed(1), target, timing, blondeAt: tracker.blondeAt, caveat,
     endedBy: ended ? 'end' : 'stopped',
     streams: streams.map((s) => ({ label: s.label, firstSeen: s.firstSeen, profile: s.profile,
       series: s.series.map((b) => (b.L == null ? null : { t: b.t, L: +b.L.toFixed(1), P: +b.P.toFixed(1), rgb: b.rgb })) })),
