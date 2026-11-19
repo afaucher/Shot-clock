@@ -127,6 +127,21 @@ Next, in the order the research ranked them:
 4. A column-integrated track-before-detect profile for faint streams.
 5. Later, a small learned verifier on space-time patches, trained on labels the classical pipeline generates.
 
+## Clips 5–7: first test on shots not used for tuning
+
+The owner's shared album now holds every clip in order (item N = clip N; item 4 is now full resolution). Clips 5–7 were added after the confidence/top-N tracker was finished and **nothing was tuned on them**:
+
+| Clip | Setup | Start (frames) | Start (tracker) | Streams shown | Tracked (two streams) |
+|---|---|---|---|---|---|
+| 4 (now full res) | patterned mug, further back | 9.57 s | exact | only the 2 real | 99% / 97% (95/94% at 360p) |
+| 5 | warm light, plain white mug, hand-held | 9.03 s (nothing at 8.9 s) | exact | only the 2 real | 100% / 93% |
+| 6 | daylight, sun stripes over a white mug | 9.37 s (nothing at 9.2 s) | exact | only the 2 real | 100% / 93% |
+| 7 | recording starts mid-shot, camera re-framed | (none) | **no start**, correct | none | n/a |
+
+Clip 7 also showed the tracker re-learning the scene repeatedly while the camera was re-framed. That is the intended behaviour, and the app now tells the user ("Camera moved, re-learning the scene, hold steady").
+
+This is the first evidence that the settings are not just fitted to the first four clips. It is still seven clips.
+
 ## Known gaps
 
 - During the 11–16 s refocus, the left stream is sometimes missed and a short false detection appears on the "INSERT" label. Persistence filtering keeps these out of the results and out of the shot start.

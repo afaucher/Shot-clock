@@ -290,6 +290,9 @@ function handleEvent(ev) {
     case 'armed':
       setStatus('Ready — start your shot');
       break;
+    case 'relearn':
+      setStatus('Camera moved — re-learning the scene, hold steady');
+      break;
     case 'start':
       sounds.start();
       startAnnounced = true;

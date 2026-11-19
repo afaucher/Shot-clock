@@ -66,7 +66,9 @@ async function evalClip(c) {
   const tracked = [...shownIds.values()].sort((a, b) => b - a).slice(0, c.spouts).map((n) => n / frames);
   return {
     id: c.id, tracked,
-    startErr: start ? start.t - c.firstLiquid : null,
+    startErr: start && c.firstLiquid != null ? start.t - c.firstLiquid : null,
+    falseStart: !!(start && c.firstLiquid == null),
+    expectStart: c.firstLiquid != null,
     over, everShown,
     main: mainStats,
     end: end ? end.t : null,
@@ -86,7 +88,8 @@ for (const c of clips) {
     const m = r.main.map((s) => `${Math.round(s.cover * 100)}%/gap ${s.gap.toFixed(1)}s/jumps ${s.jumps}`).join('  ');
     const tk = r.tracked.map((x) => `${Math.round(x * 100)}%`).join(' ');
     const endTxt = r.recordedPastPumpOff ? (r.end != null ? `end ${r.end.toFixed(1)} (pump off ${r.pumpOff})` : `no end (pump off ${r.pumpOff})`) : (r.end != null ? `end ${r.end.toFixed(1)} (shot still running!)` : 'no end (ok, recording stops mid-shot)');
-    console.log(`${r.id}: start ${r.startErr == null ? 'MISSED' : (r.startErr >= 0 ? '+' : '') + r.startErr.toFixed(2) + ' s'} | >spouts ${Math.round(r.over * 100)}%, ${r.everShown} shown | tracked ${tk} | colour ${m} | ${endTxt} | ${r.msPerFrame.toFixed(0)} ms/frame`);
+    const st = !r.expectStart ? (r.falseStart ? 'FALSE START' : 'none (correct)') : r.startErr == null ? 'MISSED' : (r.startErr >= 0 ? '+' : '') + r.startErr.toFixed(2) + ' s';
+    console.log(`${r.id}: start ${st} | >spouts ${Math.round(r.over * 100)}%, ${r.everShown} shown | tracked ${tk} | colour ${m} | ${endTxt} | ${r.msPerFrame.toFixed(0)} ms/frame`);
   }
 }
 if (args.includes('--json')) console.log(JSON.stringify(rows, null, 1));

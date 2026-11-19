@@ -1,34 +1,51 @@
 {
-  "about": "Real shots used to develop and regression-test the tracker. Videos are not in this public repo: links and download steps are in the owner's private Google Doc 'Shot Clock – test clips (private)'. Save each video locally as <id>.mp4 and run: node tools/eval.mjs --dir <folder>",
+  "about": "Real shots used to develop and regression-test the tracker. Videos are not in this public repo: links and download steps are in the owner's private Google Doc 'Shot Clock – test clips (private)'. All clips are in one shared album, in this order. Save each video locally as <id>.mp4 and run: node tools/eval.mjs --dir <folder>",
   "clips": [
     {
       "id": "clip1",
       "setup": "hand-held, warm indoor light, two spouts into a black cup and a pink mug",
       "notes": "under-tamped per the owner; went light very early",
-      "video": { "seconds": 43.6, "size": "1080x1920", "codec": "hevc" },
+      "video": {
+        "seconds": 43.6,
+        "size": "1080x1920",
+        "codec": "hevc"
+      },
       "armAt": 2.25,
       "spouts": 2,
       "firstLiquid": 10.27,
       "firstLiquidCheck": "frames: nothing at 10.1 s, both dark streams at 10.27 s",
-      "pump": { "on": 1.25, "off": 39.75 },
+      "pump": {
+        "on": 1.25,
+        "off": 39.75
+      },
       "recordedPastPumpOff": true
     },
     {
       "id": "clip2",
       "setup": "hand-held, looking down, both spouts into one red-lined mug, stainless backsplash",
-      "video": { "seconds": 42.3, "size": "1080x1920", "codec": "h264" },
+      "video": {
+        "seconds": 42.3,
+        "size": "1080x1920",
+        "codec": "h264"
+      },
       "armAt": 4.75,
       "spouts": 2,
       "firstLiquid": 10.13,
       "firstLiquidCheck": "first drop ~9.9 s, dark stream running at 10.13 s",
-      "pump": { "on": 3.75, "off": 38.25 },
+      "pump": {
+        "on": 3.75,
+        "off": 38.25
+      },
       "recordedPastPumpOff": true,
       "notes": "a thin stream is still running at 40 s"
     },
     {
       "id": "clip3",
       "setup": "hand-held, daylight with sun dappling over a white cup; re-framed in the first 2 s and moved a lot (up to 11% zoom, 18% shift)",
-      "video": { "seconds": 32.9, "size": "1080x1920" },
+      "video": {
+        "seconds": 32.9,
+        "size": "1080x1920"
+      },
       "armAt": 4.0,
       "spouts": 2,
       "firstLiquid": 8.93,
@@ -39,11 +56,57 @@
     {
       "id": "clip4",
       "setup": "further back and steadier, patterned mug, stainless all around",
-      "video": { "seconds": 31.0, "size": "360x640 (downloaded while still processing)" },
+      "video": {
+        "seconds": 31.0,
+        "size": "1080x1920"
+      },
       "armAt": 1.0,
       "spouts": 2,
       "firstLiquid": 9.57,
       "firstLiquidCheck": "frames: nothing at 9.3 s, both streams at 9.57 s",
+      "pump": null,
+      "recordedPastPumpOff": false
+    },
+    {
+      "id": "clip5",
+      "setup": "hand-held, warm light, both spouts into a plain white mug",
+      "video": {
+        "seconds": 31.9,
+        "size": "1080x1920"
+      },
+      "armAt": 3.0,
+      "spouts": 2,
+      "firstLiquid": 9.03,
+      "firstLiquidCheck": "frames: nothing at 8.9 s, drops at 9.03 s",
+      "pump": null,
+      "recordedPastPumpOff": false
+    },
+    {
+      "id": "clip6",
+      "setup": "hand-held, daylight with sun stripes across a white mug",
+      "video": {
+        "seconds": 34.9,
+        "size": "1080x1920"
+      },
+      "armAt": 3.0,
+      "spouts": 2,
+      "firstLiquid": 9.37,
+      "firstLiquidCheck": "frames: nothing at 9.2 s, streams at 9.37 s",
+      "pump": null,
+      "recordedPastPumpOff": false
+    },
+    {
+      "id": "clip7",
+      "setup": "hand-held, recording starts mid-shot with coffee already flowing; camera re-framed in the first ~8 s",
+      "video": {
+        "seconds": 23.8,
+        "size": "1080x1920"
+      },
+      "armAt": 0.0,
+      "spouts": 2,
+      "firstLiquid": null,
+      "startsMidShot": true,
+      "firstLiquidCheck": "coffee flowing in the first frame; the correct result is no shot start",
       "pump": null,
       "recordedPastPumpOff": false
     }
