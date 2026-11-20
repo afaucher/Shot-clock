@@ -62,7 +62,8 @@ Speed: about 27 ms/frame in Node and 31–35 ms/frame in headless Chromium on a 
 
 ```bash
 node tools/track.mjs shot.mp4 --arm 1.0      # run the browser tracker on a video file, print events + colour table
-node tools/eval.mjs --dir ~/shot-clips       # score the tracker on the real clips in data/clips.json (videos kept outside the repo)
+node tools/eval.mjs --dir ~/shot-clips --wrong --missed   # score the tracker on the real clips: start time, and precision/recall
+                                             # against hand-labelled real streams (data/stream_labels.json)
 npm test                                     # unit tests (geometry, colour)
 python3 tests/make_test_video.py /tmp/shot.webm             # synthetic shot (needs numpy + ffmpeg)
 python3 tests/make_test_video.py /tmp/shot.mjpeg --lead 5   # same, as a fake webcam feed

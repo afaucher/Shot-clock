@@ -150,6 +150,37 @@ This is the first evidence that the settings are not just fitted to the first fo
 
 In practice this is the "press Arm, then hold steady for a second before starting the pump" instruction; the app now says when it re-learns.
 
+## Measuring what matters: are the shown streams the real ones?
+
+Live use showed the tracker picking up reflections more often than the real streams and failing to hold them. The evaluation hadn't caught this: it checked that no more streams than spouts were shown and that they were held, but **not whether the shown streams were the real ones**. A reflection held steadily scored as well as a real stream, so earlier "tracked %" figures were overstated.
+
+`data/stream_labels.json` now holds hand-labelled positions of the real streams every 2 s for the seven clips with a start (about 90 moments). Each label gives the streams' x centres and the spout-to-cup band. They were read by eye from gridded frames, and seven marks were corrected after a zoomed second look. `tools/eval.mjs` scores:
+- **precision**: share of shown boxes that sit on a real stream (±0.06 of frame width, inside the band);
+- **recall**: share of real streams that are shown.
+
+`--wrong` and `--missed` list the failures with positions.
+
+What the failures showed: most wrong boxes were **mirror images of the streams in the polished portafilter, directly above the real streams** (same x, higher up), or reflections on a stainless backsplash. Two causes in the tracker:
+1. Tracks, and new tracks joining a stream, were matched by **x position only**, so a reflection straight above a stream could take over its identity, typically after the camera moved.
+2. Nothing encoded that coffee falls *down* from the spout into the cup.
+
+Fixes in `js/tracker.js`:
+- **2D matching.** A detection continues a track only if it also overlaps vertically with what that track covered in the last ~1.5 s (a stream is often detected in pieces). A track joins a stream only if it overlaps the stream's vertical span.
+- **Stacking prior.** In the joint top-N selection, a candidate with another stream directly below it in the same column is penalised (−20) as the likely reflection above it.
+
+Results (same corrected labels):
+
+| | Precision | Recall |
+|---|---|---|
+| Before | 80% (134/167) | 79% (123/156) |
+| After | **93%** (141/152) | **84%** (131/156) |
+
+Per clip, precision went from 68% to 100% (clip 1), 65% to 91% (clip 3), 93% to 100% (clip 2) and 90% to 100% (clip 5); the rest are unchanged or up.
+
+Still weak:
+- **Clip 8.** The scene had to be re-learned while coffee was already flowing (the recording starts ~2 s before the first drop and the camera moves). The real streams were absorbed into the "background", and a backsplash reflection wins: precision 47%, recall 35%. Its start is wrong both before (+5.9 s) and after (+11.6 s).
+- **Clip 1's thin, spraying left stream** over the black cup is only picked up part of the time.
+
 ## Known gaps
 
 - During the 11–16 s refocus, the left stream is sometimes missed and a short false detection appears on the "INSERT" label. Persistence filtering keeps these out of the results and out of the shot start.

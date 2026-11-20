@@ -35,6 +35,8 @@ export const TRACKER_DEFAULTS = {
   swapMargin: 3,         // a challenger must beat an incumbent by this much...
   swapHoldS: 0.5,        // ...for this long to take its place in the top N
   pairWeight: 60,        // penalty per frame-height of top-end mismatch between chosen streams
+  stackPenalty: 20,      // a candidate with another stream directly below it is
+                         // probably that stream's mirror image in the chrome above
                          // (streams from one portafilter start at about the same height)
   confirmS: 2.0,         // a stream must stay present this long to start the clock
   lookbackS: 3.0,        // max backdating before the present-run start
@@ -378,9 +380,12 @@ export class StreamTracker {
     for (const tr of this.tracks) [tr.cx, tr.cy] = mapX(tr.cx, tr.cy);
     for (const s of this.streams) {
       const top = mapX(s.cx, s.top ?? 0)[1];
+      const bottom = s.bottom != null ? mapX(s.cx, s.bottom)[1] : null;
       [s.cx, s.cy] = mapX(s.cx, s.cy ?? H / 2);
       s.top = top;
       s.tops = [[t, top]];
+      s.bottom = bottom;
+      s.bots = bottom != null ? [[t, bottom]] : [];
     }
     const boxes = [];
     for (const box of keep) {
@@ -635,7 +640,22 @@ export class StreamTracker {
     for (const d of dets) {
       let best = null;
       for (const tr of this.tracks) {
-        if (Math.abs(tr.cx - d.cx) < 12 && tr.last < t && (!best || Math.abs(tr.cx - d.cx) < Math.abs(best.cx - d.cx))) best = tr;
+        if (Math.abs(tr.cx - d.cx) >= 12 || tr.last >= t) continue;
+        // match in 2D: a reflection straight above a stream has the same x,
+        // so x alone lets it take over the stream's identity
+        // (compare with everything the track covered in the last ~1.5 s: a
+        // stream is often detected in pieces, top half one frame, bottom the next)
+        const [, dy, , dh] = d.box;
+        let vOk;
+        if (tr.boxes?.length) {
+          let top = Infinity, bot = -Infinity;
+          for (const [, b] of tr.boxes) { top = Math.min(top, b[1]); bot = Math.max(bot, b[1] + b[3]); }
+          vOk = Math.min(dy + dh, bot) - Math.max(dy, top) > -6;
+        } else {
+          vOk = Math.abs(dy + dh / 2 - tr.cy) < dh / 2 + 25;
+        }
+        if (!vOk) continue;
+        if (!best || Math.abs(tr.cx - d.cx) < Math.abs(best.cx - d.cx)) best = tr;
       }
       const cy = d.box[1] + d.box[3] / 2;
       if (!best) {
@@ -659,7 +679,14 @@ export class StreamTracker {
       best.matched = d;
       if (best.confirmed(fps) && !best.stream && best.flowing(o.flowMin, fps)) {
         let s = null;
-        for (const st of this.streams) if (Math.abs(st.cx - best.cx) < 20 && (!s || Math.abs(st.cx - best.cx) < Math.abs(s.cx - best.cx))) s = st;
+        // join an existing stream only if it lines up in 2D: same column AND
+        // overlapping vertically (a mirror image above is a different thing)
+        const [, by, , bh] = d.box;
+        for (const st of this.streams) {
+          if (Math.abs(st.cx - best.cx) >= 20) continue;
+          if (st.top != null && st.bottom != null && Math.min(by + bh, st.bottom) - Math.max(by, st.top) < -6) continue;
+          if (!s || Math.abs(st.cx - best.cx) < Math.abs(s.cx - best.cx)) s = st;
+        }
         if (!s) {
           s = { id: this.streams.length + 1, cx: best.cx, cy: best.cy, top: d.box[1], flows: [], samples: [], baseline: null, smoothP: null, established: false, score: 0, inTop: false };
           this.streams.push(s);
@@ -673,6 +700,10 @@ export class StreamTracker {
         (st.tops ||= []).push([t, d.box[1]]);
         while (st.tops.length && t - st.tops[0][0] > 2) st.tops.shift();
         st.top = median(st.tops.map((q) => q[1]));
+        (st.bots ||= []).push([t, d.box[1] + d.box[3]]);
+        while (st.bots.length && t - st.bots[0][0] > 2) st.bots.shift();
+        st.bottom = median(st.bots.map((q) => q[1]));
+        st.lastSeen = t;
         best.stream.flows.push(d.flow);
         if (best.stream.flows.length > 300) best.stream.flows.shift();
       }
@@ -788,11 +819,19 @@ export class StreamTracker {
     // rejects reflections low in the cup that flicker just like a stream).
     const n = Math.min(o.maxStreams, eligible.length);
     let best = null, bestVal = -Infinity;
+    const stackedOver = (p) => this.streams.some((q) => q !== p && (q.established || q.score > 0)
+      && q.lastSeen != null && t - q.lastSeen < 1.5 && p.bottom != null && q.top != null
+      && Math.abs(q.cx - p.cx) < 14 && q.top >= p.bottom - 4);
     const H = this.H;
     const choose = (startIdx, picked) => {
       if (picked.length === n) {
         let v = 0;
-        for (const p of picked) v += p.score + (p.inTop ? o.swapMargin : 0);
+        for (const p of picked) {
+          v += p.score + (p.inTop ? o.swapMargin : 0);
+          // stacking prior: coffee falls from the spout into the cup; a
+          // mirror image in the polished portafilter sits straight above it
+          if (stackedOver(p)) v -= o.stackPenalty;
+        }
         for (let i = 0; i < picked.length; i++) {
           for (let j = i + 1; j < picked.length; j++) v -= o.pairWeight * Math.abs(picked[i].top - picked[j].top) / H;
         }
