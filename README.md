@@ -46,7 +46,7 @@ Settings: target time, blonde sensitivity (experimental), sound, spoken alerts, 
 
 | Step | Method |
 |---|---|
-| Camera motion | KLT corners and optical flow, fitted with a RANSAC similarity transform to a reference frame taken at Arm. Drift-free, so hand shake is cancelled. |
+| Camera motion | KLT corners and sparse optical flow, fitted with a RANSAC similarity transform to a reference frame taken at Arm. Drift-free, so hand shake is cancelled. Dense flow on the streams and motion prediction (Kalman) are not used yet. |
 | Candidates | A thin vertical line map in Lab, minus the reference's line map dilated by a few px. Edges that were there before the shot (chrome, cup rims) cancel even with parallax. |
 | Liquid or not | A **flow score**: frame-to-frame change inside a candidate vs a ring around it. Falling coffee keeps changing; reflections on stainless only move with the camera. On real clips, streams scored 1.7–2.3 and artefacts 0.6–1.1. |
 | Confidence, top N | Each track has a running **confidence score** (log-likelihood ratio, as in radar track scoring), built from several cues: flow (counted fully only while the camera is still), anchoring in scene coordinates, highlight-like pixels, missed frames, and registration quality. Only the **N most confident streams** (setting, default 2) are shown and used. They're chosen together, so streams that start at very different heights (e.g. a reflection low in the cup) don't pair up, and a challenger must clearly win for 0.5 s to take a slot. Weaker evidence may continue a chosen stream but never start one. |
@@ -70,12 +70,23 @@ python3 tests/make_test_video.py /tmp/shot.mjpeg --lead 5   # same, as a fake we
 node tests/e2e.mjs --file /tmp/shot.webm --camera /tmp/shot.mjpeg   # real Chromium: load OpenCV, arm, start, pips, target, blonde, end
 ```
 
+## Hand labels
+
+Shots are hand-labelled in a separate **Shot Labeller** page, a private claude.ai artifact that is not part of this repo. For each video it records the first drop, when flow stops, where you would have cut, and lines along the real streams every 2 s. Videos stay on the labeller's device. The labels go to the artifact's database, one record per video, keyed by a fingerprint of the video. That way a renamed or re-downloaded copy still matches.
+
+```bash
+node tools/labels.mjs LABELS --dir ~/shots          # match label records to video files (by name, then fingerprint)
+node tools/eval.mjs --labels LABELS --dir ~/shots   # score the tracker on every labelled shot
+```
+
+`LABELS` is a dump of the database: a folder with one JSON file per record, or a JSON array.
+
 ## Research and real footage
 
 `research/` holds the Python/OpenCV prototype this tracker was ported from, and findings from four real clips (warm light, red mug + stainless, dappled daylight, further back at 360p). The start was correct to within about 0.2 s every time, with the same settings. Colour rises gradually in every shot, but its level depends on the setup. See [research/README.md](research/README.md).
 
 ## Not done yet
 
-- **Blonding calibration needs much more data.** The alert threshold has only been seen on two shots. The plan is in-app recording plus labels (tap when you'd cut), and an evaluation script over many shots.
+- **Blonding calibration needs much more data.** The alert threshold has only been seen on two shots. The labeller's *I'd cut here* mark collects this.
 - On some setups drips after pump-off keep a stream "alive"; use **Stop**.
 - Offline/PWA install, and running the vision in a Web Worker to keep the UI smoother on slow phones.

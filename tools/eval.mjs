@@ -3,6 +3,7 @@
 // data/clips.json (videos kept outside the repo).
 //
 //   node tools/eval.mjs --dir ~/shot-clips [--only clip2] [--json] [--opt name=value ...]
+//   node tools/eval.mjs --labels LABELS --dir FOLDER   # videos labelled in the Shot Labeller artifact (see tools/labels.mjs)
 //
 // For each clip found as <dir>/<id>.mp4 it reports:
 //   start    error of the detected first liquid vs the verified time
@@ -16,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { track } from './track.mjs';
+import { loadExport, matchVideos, toEvalClip } from './labels.mjs';
 import { applyAffine, invertAffine } from '../js/tracker.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -23,19 +25,35 @@ const args = process.argv.slice(2);
 const get = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
 const dir = get('--dir');
 if (!dir) { console.error('usage: node tools/eval.mjs --dir FOLDER [--only id] [--json]'); process.exit(1); }
-const { clips } = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/clips.json'), 'utf8'));
 const LABELS = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/stream_labels.json'), 'utf8'));
+let clips;
+if (get('--labels')) {
+  // Shot Labeller records: each stream line is its own mark with its own height band.
+  clips = [];
+  for (const { record, file, how } of matchVideos(loadExport(get('--labels')), dir)) {
+    if (record.info?.skip) continue;
+    if (!file) { console.log(`${record.name}: ${how} in ${dir}, skipped`); continue; }
+    const { clip, labels } = toEvalClip(record);
+    clips.push({ ...clip, file, lab: labels });
+  }
+} else {
+  clips = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/clips.json'), 'utf8')).clips
+    .map((c) => ({ ...c, file: path.join(dir, `${c.id}.mp4`), lab: LABELS.clips[c.id] }));
+}
 
 function median(a) { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : NaN; }
 
 async function evalClip(c) {
-  const file = path.join(dir, `${c.id}.mp4`);
+  const file = c.file;
   if (!fs.existsSync(file)) return null;
   const shownPerFrame = [];
   const shownIds = new Map();     // stream id -> frames shown
   // precision / recall against hand-labelled real streams
-  const lab = LABELS.clips[c.id];
-  const marks = lab ? Object.entries(lab.marks).map(([t, xs]) => ({ t: +t, xs })).sort((a, b) => a.t - b.t) : [];
+  // Marks are either x centres sharing the clip's y band (data/stream_labels.json)
+  // or { x, y: [top, bottom] } per stream (labeller exports).
+  const lab = c.lab;
+  const marks = lab ? Object.entries(lab.marks).map(([t, xs]) => ({ t: +t,
+    lines: xs.map((x) => (typeof x === 'number' ? { x, y: lab.y } : x)) })).sort((a, b) => a.t - b.t) : [];
   let mi = 0;
   const pr = { shown: 0, correct: 0, labelled: 0, found: 0, wrong: [] };
   const opts = {};
@@ -53,16 +71,15 @@ async function evalClip(c) {
           return { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2 };
         });
         const tol = LABELS.tolerance;
-        const inBand = (b) => b.cy >= lab.y[0] - tol.y && b.cy <= lab.y[1] + tol.y;
         const hits = new Set();
         for (const b of boxes) {
           pr.shown++;
-          const k = m.xs.findIndex((x) => Math.abs(b.cx - x) <= tol.x);
-          if (k >= 0 && inBand(b)) { pr.correct++; hits.add(k); } else pr.wrong.push(`${m.t}s@(${b.cx.toFixed(2)},${b.cy.toFixed(2)})`);
+          const k = m.lines.findIndex((l) => Math.abs(b.cx - l.x) <= tol.x && b.cy >= l.y[0] - tol.y && b.cy <= l.y[1] + tol.y);
+          if (k >= 0) { pr.correct++; hits.add(k); } else pr.wrong.push(`${m.t}s@(${b.cx.toFixed(2)},${b.cy.toFixed(2)})`);
         }
-        pr.labelled += m.xs.length;
+        pr.labelled += m.lines.length;
         pr.found += hits.size;
-        m.xs.forEach((x, k) => { if (!hits.has(k)) (pr.missed ||= []).push(`${m.t}s@x${x}`); });
+        m.lines.forEach((l, k) => { if (!hits.has(k)) (pr.missed ||= []).push(`${m.t}s@x${l.x}`); });
       }
       if (tr.shotStart == null || t < tr.shotStart) return;
       const ids = new Set(res.detections.map((d) => d.stream.id));
